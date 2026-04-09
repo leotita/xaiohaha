@@ -1,0 +1,17 @@
+{
+  "name": "xiaohaha-mcp",
+  "version": "1.0.0",
+  "description": "Cursor 额度放大器 - 本地浏览器对话，让 AI 持续工作",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "build:app": "mkdir -p app/dist && esbuild app/mcp-chat-ui.js --bundle --format=iife --platform=browser --outfile=app/dist/mcp-chat-ui.bundle.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/ext-apps": "^1.5.0",
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "esbuild": "^0.28.0",
+    "zod": "^3.24.2"
+  }
+}

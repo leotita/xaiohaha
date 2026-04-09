@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "xiaohaha-mcp": {
+      "command": "node",
+      "args": ["/Users/leotita/Documents/xaiohaha/server.js"]
+    }
+  }
+}
+                                                                                                                                                                                                   

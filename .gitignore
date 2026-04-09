@@ -1,0 +1,5 @@
+.xiaohaha-state.json
+.xiaohaha-state.sqlite
+.xiaohaha-state.sqlite-shm
+.xiaohaha-state.sqlite-wal
+node_modules
