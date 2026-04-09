@@ -14049,12 +14049,8 @@ container holding the app. Specify either width or maxWidth, and either height o
     }
   };
 
-  // app/mcp-chat-ui.js
-  var POLL_INTERVAL_MS = 1500;
-  var INPUT_MIN_HEIGHT_PX = 60;
-  var INPUT_MAX_HEIGHT_PX = 180;
-  var style = document.createElement("style");
-  style.textContent = `
+  // app/lib/styles.js
+  var STYLES = `
   :root {
     --xh-text: var(--mcp-ui-fg, #e8ecf8);
     --xh-muted: var(--mcp-ui-fg-muted, #9ea7c3);
@@ -14066,6 +14062,8 @@ container holding the app. Specify either width or maxWidth, and either height o
     --xh-surface-focus: #181818;
     --xh-user-bubble: linear-gradient(135deg, #6c5ce7, #8b5cf6);
     --xh-font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --xh-accent: #6c5ce7;
+    --xh-accent-soft: rgba(108, 92, 231, 0.15);
   }
 
   * {
@@ -14113,17 +14111,24 @@ container holding the app. Specify either width or maxWidth, and either height o
   }
 
   .xh-input-shell {
+    position: relative;
     width: 100%;
     border-radius: 18px;
     border: 1px solid var(--xh-border);
     background: var(--xh-chat-bg);
     box-shadow: none;
     transition: border-color 120ms ease, box-shadow 120ms ease;
+    overflow: visible;
   }
 
   .xh-input-shell:focus-within {
     border-color: var(--xh-border-strong);
     box-shadow: 0 0 0 1px var(--xh-ring);
+  }
+
+  .xh-input-shell.xh-drag-active {
+    border-color: var(--xh-accent);
+    box-shadow: 0 0 0 2px var(--xh-accent-soft);
   }
 
   .xh-form[hidden],
@@ -14136,7 +14141,7 @@ container holding the app. Specify either width or maxWidth, and either height o
     width: 100%;
     min-height: 60px;
     max-height: 180px;
-    padding: 16px 18px;
+    padding: 16px 18px 8px;
     resize: none;
     border: 0;
     border-radius: 18px;
@@ -14191,26 +14196,671 @@ container holding the app. Specify either width or maxWidth, and either height o
   .xh-ai-reply[hidden] {
     display: none;
   }
-`;
-  document.head.appendChild(style);
-  var root = document.getElementById("app");
-  if (!root) {
-    throw new Error("Missing #app mount element.");
+
+  /* \u2500\u2500 Attachment bar \u2500\u2500 */
+  .xh-attachments {
+    display: flex;
+    gap: 6px;
+    padding: 10px 14px 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    flex-wrap: wrap;
   }
-  if (!root.querySelector("#composerForm")) {
+  .xh-attachments::-webkit-scrollbar { display: none; }
+  .xh-attachments[hidden] { display: none; }
+
+  .xh-att-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px 4px 6px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    font-size: 12px;
+    color: var(--xh-muted);
+    white-space: nowrap;
+    max-width: 220px;
+    cursor: default;
+    transition: background 120ms ease;
+    animation: xh-chip-in 200ms ease;
+  }
+  @keyframes xh-chip-in {
+    from { opacity: 0; transform: scale(0.92); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+  .xh-att-chip:hover {
+    background: rgba(255, 255, 255, 0.10);
+  }
+
+  .xh-att-thumb {
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+
+  .xh-att-icon {
+    font-size: 14px;
+    flex-shrink: 0;
+    width: 20px;
+    text-align: center;
+  }
+
+  .xh-att-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .xh-att-size {
+    font-size: 10px;
+    opacity: 0.6;
+    flex-shrink: 0;
+  }
+
+  .xh-att-remove {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border: none;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--xh-muted);
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 10px;
+    line-height: 1;
+    padding: 0;
+    flex-shrink: 0;
+    transition: background 120ms ease, color 120ms ease;
+  }
+  .xh-att-remove:hover {
+    background: rgba(255, 100, 100, 0.3);
+    color: #ff8f8f;
+  }
+
+  /* \u2500\u2500 Input action bar \u2500\u2500 */
+  .xh-input-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 10px 8px;
+  }
+
+  .xh-action-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    color: var(--xh-muted);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+    padding: 0;
+  }
+  .xh-action-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--xh-text);
+  }
+  .xh-action-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  /* \u2500\u2500 Drag overlay \u2500\u2500 */
+  .xh-drag-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(108, 92, 231, 0.06);
+    border: 2px dashed rgba(108, 92, 231, 0.45);
+    border-radius: 18px;
+    pointer-events: none;
+    animation: xh-drag-pulse 1.5s ease infinite;
+  }
+  @keyframes xh-drag-pulse {
+    0%, 100% { border-color: rgba(108, 92, 231, 0.45); }
+    50%      { border-color: rgba(108, 92, 231, 0.7); }
+  }
+  .xh-drag-overlay[hidden] { display: none; }
+
+  .xh-drag-label {
+    padding: 6px 18px;
+    border-radius: 10px;
+    background: var(--xh-accent-soft);
+    color: #a78bfa;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+  }
+
+  /* \u2500\u2500 Slash command palette \u2500\u2500 */
+  .xh-cmd-palette {
+    width: 100%;
+    background: var(--xh-surface, #202020);
+    border: 1px solid var(--xh-border-strong);
+    border-radius: 12px;
+    padding: 4px;
+    margin-bottom: 6px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+    overflow-y: auto;
+    animation: xh-palette-in 150ms ease;
+  }
+  @keyframes xh-palette-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .xh-cmd-palette[hidden] { display: none; }
+
+  .xh-cmd-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 80ms ease;
+  }
+  .xh-cmd-item:hover,
+  .xh-cmd-item.active {
+    background: rgba(255, 255, 255, 0.07);
+  }
+
+  .xh-cmd-icon {
+    font-size: 16px;
+    width: 24px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+
+  .xh-cmd-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .xh-cmd-name {
+    font-size: 13px;
+    color: var(--xh-text);
+    font-weight: 500;
+  }
+
+  .xh-cmd-desc {
+    font-size: 11px;
+    color: var(--xh-muted);
+    margin-top: 1px;
+  }
+
+`;
+
+  // app/lib/constants.js
+  var POLL_INTERVAL_MS = 1500;
+  var INPUT_MIN_HEIGHT_PX = 60;
+  var INPUT_MAX_HEIGHT_PX = 180;
+  var MAX_FILE_SIZE_BYTES = 1024 * 1024;
+  var MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
+  var MAX_ATTACHMENTS = 10;
+  var TEXT_EXTENSIONS = /* @__PURE__ */ new Set([
+    "txt",
+    "md",
+    "js",
+    "ts",
+    "jsx",
+    "tsx",
+    "json",
+    "xml",
+    "html",
+    "css",
+    "scss",
+    "less",
+    "py",
+    "rb",
+    "java",
+    "c",
+    "cpp",
+    "h",
+    "hpp",
+    "cs",
+    "go",
+    "rs",
+    "swift",
+    "kt",
+    "sh",
+    "bash",
+    "zsh",
+    "yml",
+    "yaml",
+    "toml",
+    "ini",
+    "cfg",
+    "conf",
+    "env",
+    "sql",
+    "graphql",
+    "vue",
+    "svelte",
+    "astro",
+    "php",
+    "pl",
+    "r",
+    "lua",
+    "vim",
+    "dockerfile",
+    "makefile",
+    "gitignore",
+    "editorconfig",
+    "prettierrc",
+    "eslintrc",
+    "log",
+    "csv",
+    "tsv",
+    "svg"
+  ]);
+  var SLASH_COMMANDS = [
+    { id: "file", label: "/file", desc: "\u6DFB\u52A0\u6587\u4EF6\u9644\u4EF6", icon: "\u{1F4CE}" },
+    { id: "image", label: "/image", desc: "\u7C98\u8D34\u6216\u9009\u62E9\u56FE\u7247", icon: "\u{1F5BC}\uFE0F" },
+    { id: "compact", label: "/compact", desc: "\u8BA9 AI \u751F\u6210\u4E0A\u4E0B\u6587\u6458\u8981", icon: "\u{1F4E6}" },
+    { id: "context", label: "/context", desc: "\u624B\u52A8\u8BBE\u7F6E\u4E0A\u4E0B\u6587\u6458\u8981", icon: "\u270F\uFE0F" },
+    { id: "clearctx", label: "/clearctx", desc: "\u6E05\u9664\u4E0A\u4E0B\u6587\u6458\u8981", icon: "\u{1F9F9}" },
+    { id: "reset", label: "/reset", desc: "\u91CD\u65B0\u5F00\u59CB\uFF0C\u5FD8\u8BB0\u5386\u53F2", icon: "\u{1F504}", hostCommand: "/new task" },
+    { id: "summarize", label: "/summarize", desc: "\u603B\u7ED3\u5F53\u524D\u8FDB\u5C55\u548C\u5F85\u529E\u4E8B\u9879", icon: "\u{1F4DD}" },
+    { id: "undo", label: "/undo", desc: "\u64A4\u9500\u4E0A\u4E00\u6B65", icon: "\u21A9\uFE0F" },
+    { id: "clear", label: "/clear", desc: "\u6E05\u9664\u6240\u6709\u9644\u4EF6", icon: "\u{1F5D1}\uFE0F" },
+    { id: "help", label: "/help", desc: "\u67E5\u770B\u5FEB\u6377\u64CD\u4F5C\u5E2E\u52A9", icon: "\u{1F4A1}" }
+  ];
+
+  // app/lib/utils.js
+  function escapeHtml(text) {
+    return String(text).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  }
+  function formatFileSize(bytes) {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  }
+  function getFileExtension(name) {
+    const dot = name.lastIndexOf(".");
+    return dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
+  }
+  function isTextFile(file2) {
+    if (file2.type.startsWith("text/")) return true;
+    if (file2.type === "application/json" || file2.type === "application/xml") return true;
+    if (file2.type === "application/javascript") return true;
+    return TEXT_EXTENSIONS.has(getFileExtension(file2.name));
+  }
+  function isImageFile(file2) {
+    return file2.type.startsWith("image/");
+  }
+  function readAsText(file2) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error("\u8BFB\u53D6\u6587\u4EF6\u5931\u8D25"));
+      reader.readAsText(file2);
+    });
+  }
+  function readAsDataUrl(file2) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error("\u8BFB\u53D6\u6587\u4EF6\u5931\u8D25"));
+      reader.readAsDataURL(file2);
+    });
+  }
+
+  // app/lib/attachment-manager.js
+  var AttachmentManager = class {
+    constructor(barEl) {
+      this.barEl = barEl;
+      this.list = [];
+      this.nextId = 1;
+      this.onError = null;
+    }
+    get length() {
+      return this.list.length;
+    }
+    add(att) {
+      if (this.list.length >= MAX_ATTACHMENTS) {
+        this.onError?.(`\u6700\u591A\u6DFB\u52A0 ${MAX_ATTACHMENTS} \u4E2A\u9644\u4EF6`);
+        return -1;
+      }
+      att.id = this.nextId++;
+      this.list.push(att);
+      this.renderBar();
+      return att.id;
+    }
+    updateById(id, patch) {
+      const att = this.list.find((a) => a.id === id);
+      if (att) {
+        Object.assign(att, patch);
+        this.renderBar();
+      }
+    }
+    remove(id) {
+      const index = this.list.findIndex((a) => a.id === id);
+      if (index >= 0) {
+        const att = this.list[index];
+        if (att.objectUrl) URL.revokeObjectURL(att.objectUrl);
+        this.list.splice(index, 1);
+        this.renderBar();
+      }
+    }
+    clear() {
+      for (const att of this.list) {
+        if (att.objectUrl) URL.revokeObjectURL(att.objectUrl);
+      }
+      this.list.length = 0;
+      this.renderBar();
+    }
+    async processFiles(fileList) {
+      const files = [...fileList];
+      for (const file2 of files) {
+        try {
+          if (isImageFile(file2)) {
+            if (file2.size > MAX_IMAGE_SIZE_BYTES) {
+              this.onError?.(`\u56FE\u7247 "${file2.name}" \u592A\u5927 (${formatFileSize(file2.size)})\uFF0C\u4E0A\u9650 5MB`);
+              continue;
+            }
+            const dataUrl = await readAsDataUrl(file2);
+            this.add({
+              type: "image",
+              name: file2.name || "image.png",
+              content: dataUrl,
+              mimeType: file2.type,
+              size: file2.size
+            });
+          } else if (isTextFile(file2)) {
+            if (file2.size > MAX_FILE_SIZE_BYTES) {
+              this.onError?.(`\u6587\u4EF6 "${file2.name}" \u592A\u5927 (${formatFileSize(file2.size)})\uFF0C\u4E0A\u9650 1MB`);
+              continue;
+            }
+            const content = await readAsText(file2);
+            this.add({
+              type: "file",
+              name: file2.name,
+              content,
+              mimeType: file2.type || "text/plain",
+              size: file2.size
+            });
+          } else {
+            this.add({
+              type: "file",
+              name: file2.name,
+              content: `[\u4E8C\u8FDB\u5236\u6587\u4EF6: ${file2.name}, ${formatFileSize(file2.size)}, ${file2.type || "unknown"}]`,
+              mimeType: file2.type || "application/octet-stream",
+              size: file2.size
+            });
+          }
+        } catch {
+          this.onError?.(`\u8BFB\u53D6 "${file2.name}" \u5931\u8D25`);
+        }
+      }
+    }
+    renderBar() {
+      if (this.list.length === 0) {
+        this.barEl.hidden = true;
+        this.barEl.innerHTML = "";
+        return;
+      }
+      this.barEl.hidden = false;
+      this.barEl.innerHTML = this.list.map((att) => {
+        if (att.type === "image") {
+          const src = att.content || att.objectUrl;
+          return `<div class="xh-att-chip" data-att-id="${att.id}">
+            <img class="xh-att-thumb" src="${escapeHtml(src)}" alt="">
+            <span class="xh-att-name">${escapeHtml(att.name)}</span>
+            <span class="xh-att-size">${formatFileSize(att.size)}</span>
+            <button class="xh-att-remove" data-att-id="${att.id}" type="button" title="\u79FB\u9664">\xD7</button>
+          </div>`;
+        }
+        if (att.type === "snippet") {
+          return `<div class="xh-att-chip xh-att-chip--snippet" data-att-id="${att.id}">
+            <span class="xh-att-icon">\u{1F4CB}</span>
+            <span class="xh-att-name" style="font-family:monospace;font-size:11px;">${escapeHtml(att.name)}</span>
+            <button class="xh-att-remove" data-att-id="${att.id}" type="button" title="\u79FB\u9664">\xD7</button>
+          </div>`;
+        }
+        return `<div class="xh-att-chip" data-att-id="${att.id}">
+          <span class="xh-att-icon">\u{1F4C4}</span>
+          <span class="xh-att-name">${escapeHtml(att.name)}</span>
+          <span class="xh-att-size">${formatFileSize(att.size)}</span>
+          <button class="xh-att-remove" data-att-id="${att.id}" type="button" title="\u79FB\u9664">\xD7</button>
+        </div>`;
+      }).join("");
+      this.barEl.querySelectorAll(".xh-att-remove").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          this.remove(Number(btn.dataset.attId));
+        });
+      });
+    }
+    processCodeMeta(metaJson, codeText) {
+      try {
+        const meta = JSON.parse(metaJson);
+        const fileUri = meta?.source?.uri || meta?.uri || "";
+        const range = meta?.source?.range || meta?.range || null;
+        let fileName = fileUri ? fileUri.split("/").pop() || fileUri : "snippet";
+        if (fileUri.startsWith("file://")) {
+          try {
+            fileName = decodeURIComponent(new URL(fileUri).pathname.split("/").pop());
+          } catch {
+          }
+        }
+        const startLine = range?.startLineNumber ?? range?.start?.line ?? null;
+        const endLine = range?.endLineNumber ?? range?.end?.line ?? null;
+        const lineRef = startLine !== null && endLine !== null ? `:${startLine}-${endLine}` : startLine !== null ? `:${startLine}` : "";
+        const label = fileName + lineRef;
+        this.add({
+          type: "snippet",
+          name: label,
+          content: codeText,
+          mimeType: "text/plain",
+          size: new TextEncoder().encode(codeText).length,
+          filePath: fileUri ? fileUri.startsWith("file://") ? (() => {
+            try {
+              return decodeURIComponent(new URL(fileUri).pathname);
+            } catch {
+              return "";
+            }
+          })() : fileUri : "",
+          lineRef
+        });
+      } catch {
+        this.add({
+          type: "snippet",
+          name: "snippet",
+          content: codeText,
+          mimeType: "text/plain",
+          size: new TextEncoder().encode(codeText).length,
+          filePath: "",
+          lineRef: ""
+        });
+      }
+    }
+    buildFullMessage(rawText) {
+      if (this.list.length === 0) return rawText;
+      let message = rawText;
+      for (const att of this.list) {
+        if (att.type === "image") {
+          message += `
+
+[XIAOHAHA_IMG:${att.content}]`;
+        } else if (att.type === "snippet") {
+          const ref = att.filePath ? `${att.filePath}${att.lineRef}` : att.name;
+          const baseName = att.name.replace(/\s*\([\d\-]+\)$/, "").split(":")[0];
+          const ext = getFileExtension(baseName);
+          message += `
+
+\u{1F4CB} \`${ref}\`:
+\`\`\`${ext}
+${att.content}
+\`\`\``;
+        } else {
+          const ext = getFileExtension(att.name);
+          message += `
+
+\u{1F4CE} ${att.name}:
+\`\`\`${ext}
+${att.content}
+\`\`\``;
+        }
+      }
+      return message;
+    }
+    buildPreviewText(rawText) {
+      if (this.list.length === 0) return rawText;
+      const parts = [];
+      if (rawText) parts.push(rawText);
+      const imageCount = this.list.filter((a) => a.type === "image").length;
+      const fileCount = this.list.filter((a) => a.type === "file").length;
+      const snippetCount = this.list.filter((a) => a.type === "snippet").length;
+      const labels = [];
+      if (imageCount > 0) labels.push(`\u{1F5BC}\uFE0F ${imageCount} \u5F20\u56FE\u7247`);
+      if (fileCount > 0) labels.push(`\u{1F4CE} ${fileCount} \u4E2A\u6587\u4EF6`);
+      if (snippetCount > 0) {
+        const names = this.list.filter((a) => a.type === "snippet").map((a) => `\`${a.name}\``).join("  ");
+        labels.push(`\u{1F4CB} ${names}`);
+      }
+      if (labels.length > 0) parts.push(labels.join("  "));
+      return parts.join("\n\n");
+    }
+  };
+
+  // app/lib/command-palette.js
+  var CommandPalette = class {
+    constructor(paletteEl) {
+      this.el = paletteEl;
+      this.visible = false;
+      this.filter = "";
+      this.selectedIndex = -1;
+      this.filtered = [];
+      this.onExecute = null;
+    }
+    getFilteredCommands(filter) {
+      if (!filter) return [...SLASH_COMMANDS];
+      const lower = filter.toLowerCase();
+      return SLASH_COMMANDS.filter(
+        (cmd) => cmd.id.includes(lower) || cmd.label.includes(lower) || cmd.desc.includes(lower)
+      );
+    }
+    show(filter = "") {
+      const filtered = this.getFilteredCommands(filter);
+      if (filtered.length === 0) {
+        this.hide();
+        return;
+      }
+      const wasVisible = this.visible;
+      this.visible = true;
+      this.filter = filter;
+      this.filtered = filtered;
+      if (!wasVisible) {
+        this.selectedIndex = -1;
+      } else {
+        this.selectedIndex = this.selectedIndex < 0 ? -1 : Math.min(this.selectedIndex, filtered.length - 1);
+      }
+      this.el.hidden = false;
+      this.renderItems();
+    }
+    hide() {
+      this.visible = false;
+      this.filter = "";
+      this.selectedIndex = -1;
+      this.filtered = [];
+      this.el.hidden = true;
+      this.el.innerHTML = "";
+    }
+    renderItems() {
+      this.el.innerHTML = this.filtered.map(
+        (cmd, i) => `
+      <div class="xh-cmd-item${i === this.selectedIndex ? " active" : ""}" data-cmd-index="${i}" data-cmd-id="${cmd.id}">
+        <span class="xh-cmd-icon">${cmd.icon}</span>
+        <div class="xh-cmd-info">
+          <div class="xh-cmd-name">${escapeHtml(cmd.label)}</div>
+          <div class="xh-cmd-desc">${escapeHtml(cmd.desc)}</div>
+        </div>
+      </div>`
+      ).join("");
+      this.el.querySelectorAll(".xh-cmd-item").forEach((el) => {
+        el.addEventListener("click", () => this.onExecute?.(el.dataset.cmdId));
+        el.addEventListener("mouseenter", () => {
+          this.selectedIndex = Number(el.dataset.cmdIndex);
+        });
+      });
+    }
+    moveSelection(delta) {
+      if (!this.visible || this.filtered.length === 0) return;
+      if (this.selectedIndex < 0) {
+        this.selectedIndex = delta > 0 ? 0 : this.filtered.length - 1;
+      } else {
+        this.selectedIndex = (this.selectedIndex + delta + this.filtered.length) % this.filtered.length;
+      }
+      this.el.querySelectorAll(".xh-cmd-item").forEach((item, idx) => {
+        item.classList.toggle("active", idx === this.selectedIndex);
+      });
+    }
+    getSelectedCommandId() {
+      if (this.selectedIndex < 0 || this.selectedIndex >= this.filtered.length) return null;
+      return this.filtered[this.selectedIndex]?.id || null;
+    }
+    getSelectedLabel() {
+      if (this.selectedIndex < 0) return "";
+      return this.filtered[this.selectedIndex]?.label || "";
+    }
+    handleInputChange(text) {
+      if (text.startsWith("/")) {
+        this.show(text.slice(1).trim());
+      } else if (this.visible) {
+        this.hide();
+      }
+    }
+  };
+
+  // app/mcp-chat-ui.js
+  var styleEl = document.createElement("style");
+  styleEl.textContent = STYLES;
+  document.head.appendChild(styleEl);
+  var root = document.getElementById("app");
+  if (!root) throw new Error("Missing #app mount element.");
+  var needsFullDom = !root.querySelector("#inputShell") || !root.querySelector("#cmdPalette") || root.querySelector("#cmdPalette")?.closest("#inputShell");
+  if (needsFullDom) {
     root.innerHTML = `
     <div class="xh-root">
       <div class="xh-preview" id="sentPreview" hidden></div>
+      <div class="xh-cmd-palette" id="cmdPalette" hidden></div>
       <form class="xh-form" id="composerForm">
-        <div class="xh-input-shell">
+        <div class="xh-input-shell" id="inputShell">
+          <div class="xh-attachments" id="attachmentBar" hidden></div>
           <textarea
             class="xh-input"
             id="messageInput"
             rows="1"
-            placeholder="\u7EE7\u7EED\u7ED9 Agent \u53D1\u6D88\u606F..."
+            placeholder="\u7EE7\u7EED\u7ED9 Agent \u53D1\u6D88\u606F... (/ \u8C03\u51FA\u547D\u4EE4)"
           ></textarea>
+          <div class="xh-input-actions">
+            <button class="xh-action-btn" id="attachFileBtn" type="button" title="\u6DFB\u52A0\u6587\u4EF6">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+            </button>
+            <button class="xh-action-btn" id="attachImageBtn" type="button" title="\u6DFB\u52A0\u56FE\u7247">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            </button>
+          </div>
+          <div class="xh-drag-overlay" id="dragOverlay" hidden>
+            <div class="xh-drag-label">\u91CA\u653E\u4EE5\u6DFB\u52A0\u6587\u4EF6</div>
+          </div>
         </div>
       </form>
+      <input type="file" id="fileInput" multiple hidden>
+      <input type="file" id="imageInput" accept="image/*" multiple hidden>
       <div class="xh-error" id="errorBanner" hidden></div>
     </div>
   `;
@@ -14219,16 +14869,13 @@ container holding the app. Specify either width or maxWidth, and either height o
   var messageInput = document.getElementById("messageInput");
   var sentPreview = document.getElementById("sentPreview");
   var errorBanner = document.getElementById("errorBanner");
-  var app = new gQ(
-    {
-      name: "xiaohaha-chat-ui",
-      version: "1.0.2"
-    },
-    {},
-    {
-      autoResize: true
-    }
-  );
+  var inputShell = document.getElementById("inputShell");
+  var attachFileBtn = document.getElementById("attachFileBtn");
+  var attachImageBtn = document.getElementById("attachImageBtn");
+  var fileInput = document.getElementById("fileInput");
+  var imageInput = document.getElementById("imageInput");
+  var dragOverlay = document.getElementById("dragOverlay");
+  var app = new gQ({ name: "xiaohaha-chat-ui", version: "1.0.3" }, {}, { autoResize: true });
   var uiState = {
     connected: false,
     instanceId: "",
@@ -14245,13 +14892,16 @@ container holding the app. Specify either width or maxWidth, and either height o
   };
   var pollTimer = null;
   var isComposing = false;
-  function escapeHtml(text) {
-    return String(text).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-  }
+  var dragCounter = 0;
+  var attachments = new AttachmentManager(document.getElementById("attachmentBar"));
+  attachments.onError = (msg) => {
+    uiState.error = msg;
+    render();
+  };
+  var cmdPalette = new CommandPalette(document.getElementById("cmdPalette"));
+  cmdPalette.onExecute = executeCommand;
   function autoResizeInput(force = false) {
-    if (isComposing && !force) {
-      return;
-    }
+    if (isComposing && !force) return;
     messageInput.style.height = `${INPUT_MIN_HEIGHT_PX}px`;
     messageInput.style.height = `${Math.max(
       INPUT_MIN_HEIGHT_PX,
@@ -14259,33 +14909,11 @@ container holding the app. Specify either width or maxWidth, and either height o
     )}px`;
   }
   function syncHostContext(hostContext) {
-    if (hostContext?.theme) {
-      PQ(hostContext.theme);
-    }
-    if (hostContext?.styles?.variables) {
-      qQ(hostContext.styles.variables);
-    }
-    if (hostContext?.styles?.css?.fonts) {
-      TQ(hostContext.styles.css.fonts);
-    }
+    if (hostContext?.theme) PQ(hostContext.theme);
+    if (hostContext?.styles?.variables) qQ(hostContext.styles.variables);
+    if (hostContext?.styles?.css?.fonts) TQ(hostContext.styles.css.fonts);
     if (hostContext?.toolInfo?.id !== void 0 && hostContext?.toolInfo?.id !== null) {
       uiState.instanceId = String(hostContext.toolInfo.id);
-    }
-  }
-  function render() {
-    const showPreview = Boolean(uiState.submittedMessage);
-    const showComposer = !showPreview;
-    composerForm.hidden = !showComposer;
-    sentPreview.hidden = !showPreview;
-    errorBanner.hidden = !uiState.error;
-    errorBanner.textContent = uiState.error;
-    if (showPreview) {
-      sentPreview.innerHTML = escapeHtml(uiState.submittedMessage);
-    } else {
-      sentPreview.innerHTML = "";
-    }
-    if (showComposer) {
-      messageInput.disabled = uiState.sending;
     }
   }
   function normalizeState(state) {
@@ -14298,36 +14926,25 @@ container holding the app. Specify either width or maxWidth, and either height o
     };
   }
   function getLatestAiMessage(events) {
-    if (!Array.isArray(events)) {
-      return "";
-    }
-    for (let index = events.length - 1; index >= 0; index -= 1) {
-      const event = events[index];
-      if (event?.role === "ai" && typeof event?.text === "string" && event.text.trim()) {
-        return event.text.trim();
-      }
+    if (!Array.isArray(events)) return "";
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i];
+      if (ev?.role === "ai" && typeof ev?.text === "string" && ev.text.trim()) return ev.text.trim();
     }
     return "";
   }
   function extractState(result) {
-    if (result?.structuredContent?.state) {
-      return normalizeState(result.structuredContent.state);
-    }
+    if (result?.structuredContent?.state) return normalizeState(result.structuredContent.state);
     const textBlock = result?.content?.find((item) => item.type === "text");
-    if (!textBlock?.text) {
-      return null;
-    }
+    if (!textBlock?.text) return null;
     try {
-      const parsed = JSON.parse(textBlock.text);
-      return normalizeState(parsed.state);
+      return normalizeState(JSON.parse(textBlock.text).state);
     } catch {
       return null;
     }
   }
   function extractErrorMessage(result) {
-    if (!result?.isError) {
-      return "";
-    }
+    if (!result?.isError) return "";
     if (typeof result?.structuredContent?.error === "string" && result.structuredContent.error.trim()) {
       return result.structuredContent.error.trim();
     }
@@ -14335,29 +14952,33 @@ container holding the app. Specify either width or maxWidth, and either height o
     return textBlock?.text?.trim() || "\u53D1\u9001\u5931\u8D25";
   }
   function extractConversationIdFromArgs(args) {
-    if (!args || typeof args !== "object") {
-      return "";
-    }
-    if (typeof args.conversation_id === "string") {
-      return args.conversation_id;
-    }
-    return "";
+    if (!args || typeof args !== "object") return "";
+    return typeof args.conversation_id === "string" ? args.conversation_id : "";
   }
   function extractPromptStateFromToolResult(result) {
     const textBlocks = Array.isArray(result?.content) ? result.content.filter((item) => item?.type === "text" && typeof item.text === "string") : [];
     const combinedText = textBlocks.map((item) => item.text).join("\n");
-    if (!combinedText) {
-      return {
-        conversationId: "",
-        previewMessage: ""
-      };
-    }
+    if (!combinedText) return { conversationId: "", previewMessage: "" };
     const conversationMatch = combinedText.match(/当前会话 conversation_id:\s*(.+)/);
     const previewMatch = combinedText.match(/用户发来新消息:\s*([\s\S]*?)\n\n请根据上述消息继续工作/);
     return {
       conversationId: conversationMatch?.[1]?.trim() || "",
       previewMessage: previewMatch?.[1]?.trim() || ""
     };
+  }
+  function render() {
+    const showPreview = Boolean(uiState.submittedMessage);
+    const showComposer = !showPreview;
+    composerForm.hidden = !showComposer;
+    sentPreview.hidden = !showPreview;
+    errorBanner.hidden = !uiState.error;
+    errorBanner.textContent = uiState.error;
+    if (showPreview) {
+      sentPreview.innerHTML = escapeHtml(uiState.submittedMessage);
+    } else {
+      sentPreview.innerHTML = "";
+      messageInput.disabled = uiState.sending;
+    }
   }
   async function refreshState() {
     const result = await app.callServerTool({
@@ -14368,17 +14989,14 @@ container holding the app. Specify either width or maxWidth, and either height o
       }
     });
     const nextState = extractState(result);
-    if (!nextState) {
-      throw new Error("Failed to parse chat state from MCP response.");
-    }
+    if (!nextState) throw new Error("Failed to parse chat state from MCP response.");
     const previewMessage = nextState.previewMessage.trim();
-    const latestAiMessage = getLatestAiMessage(nextState.events);
     uiState.connected = true;
     uiState.conversationId = nextState.conversationId || uiState.conversationId;
     uiState.anyWaiting = nextState.anyWaiting;
     uiState.waiting = nextState.waiting;
     uiState.error = "";
-    uiState.latestAiMessage = latestAiMessage;
+    uiState.latestAiMessage = getLatestAiMessage(nextState.events);
     if (previewMessage) {
       uiState.submittedMessage = previewMessage;
       uiState.completedTool = true;
@@ -14388,19 +15006,126 @@ container holding the app. Specify either width or maxWidth, and either height o
     }
     render();
   }
-  async function sendMessage() {
-    const message = messageInput.value.trim();
-    const canSend = !uiState.sending;
-    if (!message || uiState.sending || !canSend) {
+  var SYSTEM_COMMAND_MESSAGES = {
+    compact: "\u3010\u7CFB\u7EDF\u6307\u4EE4 /compact\u3011\u8BF7\u5C06\u5F53\u524D\u5BF9\u8BDD\u7684\u5B8C\u6574\u4E0A\u4E0B\u6587\u538B\u7F29\u4E3A\u4E00\u4EFD\u7B80\u6D01\u7684\u5DE5\u4F5C\u6458\u8981\uFF08\u4E0D\u8D85\u8FC7 500 \u5B57\uFF09\uFF0C\u5305\u542B\uFF1A\n1. \u9879\u76EE\u80CC\u666F\u548C\u6280\u672F\u67B6\u6784\n2. \u5DF2\u5B8C\u6210\u7684\u6240\u6709\u5DE5\u4F5C\uFF08\u5217\u51FA\u5173\u952E\u6539\u52A8\u548C\u6587\u4EF6\uFF09\n3. \u5F53\u524D\u72B6\u6001\n4. \u5F85\u5904\u7406\u4E8B\u9879\u548C\u5DF2\u77E5\u95EE\u9898\n5. \u91CD\u8981\u51B3\u7B56\u548C\u6280\u672F\u7EA6\u675F\n\n\u6458\u8981\u751F\u6210\u540E\u5C06\u4F5C\u4E3A\u540E\u7EED\u5BF9\u8BDD\u7684\u4E0A\u4E0B\u6587\u53C2\u8003\u3002\u5B8C\u6210\u540E\u7EE7\u7EED\u7B49\u5F85\u6211\u7684\u6307\u4EE4\u3002\n\n\u63D0\u793A\uFF1A\u5982\u679C\u4E0A\u4E0B\u6587\u7A97\u53E3\u5DF2\u7ECF\u5F88\u957F\uFF0C\u5EFA\u8BAE\u5728 Cursor \u539F\u751F\u804A\u5929\u6846\u4E2D\u6267\u884C /compact \u6765\u771F\u6B63\u538B\u7F29\u5BF9\u8BDD\u5386\u53F2\u3002",
+    summarize: "\u3010\u7CFB\u7EDF\u6307\u4EE4 /summarize\u3011\u8BF7\u603B\u7ED3\u5F53\u524D\u7684\u5DE5\u4F5C\u8FDB\u5C55\uFF1A\n1. \u5DF2\u5B8C\u6210\u7684\u5185\u5BB9\n2. \u5F53\u524D\u72B6\u6001\n3. \u4E0B\u4E00\u6B65\u5F85\u529E\u4E8B\u9879\n\u603B\u7ED3\u5B8C\u540E\u7EE7\u7EED\u7B49\u5F85\u6211\u7684\u6307\u4EE4\u3002",
+    undo: "\u3010\u7CFB\u7EDF\u6307\u4EE4 /undo\u3011\u8BF7\u64A4\u9500\u4E0A\u4E00\u6B65\u64CD\u4F5C\uFF0C\u6062\u590D\u5230\u4E4B\u524D\u7684\u72B6\u6001\u3002\u8BF4\u660E\u4F60\u64A4\u9500\u4E86\u4EC0\u4E48\uFF0C\u7136\u540E\u7B49\u5F85\u6211\u7684\u786E\u8BA4\u6216\u540E\u7EED\u6307\u4EE4\u3002"
+  };
+  function executeCommand(cmdId) {
+    const matchedCmd = SLASH_COMMANDS.find((c) => c.id === cmdId) || { id: cmdId, hostCommand: null };
+    cmdPalette.hide();
+    messageInput.value = "";
+    autoResizeInput(true);
+    if (matchedCmd.hostCommand) {
+      void app.sendMessage({
+        role: "user",
+        content: [{ type: "text", text: matchedCmd.hostCommand }]
+      }).catch((err) => {
+        uiState.error = `\u547D\u4EE4\u53D1\u9001\u5931\u8D25: ${err instanceof Error ? err.message : "\u672A\u77E5\u9519\u8BEF"}`;
+        render();
+      });
       return;
     }
+    if (SYSTEM_COMMAND_MESSAGES[cmdId]) {
+      messageInput.value = SYSTEM_COMMAND_MESSAGES[cmdId];
+      autoResizeInput(true);
+      messageInput.focus();
+      return;
+    }
+    switch (cmdId) {
+      case "file":
+        fileInput.click();
+        break;
+      case "image":
+        imageInput.click();
+        break;
+      case "clear":
+        attachments.clear();
+        uiState.error = "";
+        render();
+        break;
+      case "context":
+        messageInput.value = "";
+        messageInput.placeholder = "\u8F93\u5165\u4F60\u7684\u4E0A\u4E0B\u6587\u6458\u8981\uFF0C\u6309 Enter \u4FDD\u5B58...";
+        messageInput.dataset.contextMode = "1";
+        autoResizeInput(true);
+        messageInput.focus();
+        break;
+      case "clearctx":
+        app.callServerTool({
+          name: "xiaohaha_set_context",
+          arguments: {
+            summary: "",
+            conversation_id: uiState.conversationId || void 0
+          }
+        }).then(() => {
+          uiState.error = "";
+          render();
+        }).catch((err) => {
+          uiState.error = `\u6E05\u9664\u5931\u8D25: ${err instanceof Error ? err.message : "\u672A\u77E5\u9519\u8BEF"}`;
+          render();
+        });
+        break;
+      case "help": {
+        messageInput.value = [
+          "\u{1F4CE}  \u62D6\u62FD\u6587\u4EF6\u5230\u8F93\u5165\u6846\u6DFB\u52A0\u9644\u4EF6",
+          "\u{1F5BC}\uFE0F  Ctrl/Cmd+V \u7C98\u8D34\u56FE\u7247",
+          "\u{1F4CB}  \u4ECE\u7F16\u8F91\u5668\u590D\u5236\u4EE3\u7801\u53EF\u4FDD\u7559\u6587\u4EF6\u540D\u548C\u884C\u53F7",
+          "/   \u8F93\u5165 / \u8C03\u51FA\u547D\u4EE4\u83DC\u5355",
+          "\u23CE  Enter \u53D1\u9001  \u21E7\u23CE \u6362\u884C",
+          "/compact  \u8BA9 AI \u751F\u6210\u4E0A\u4E0B\u6587\u6458\u8981",
+          "/context  \u624B\u52A8\u5199\u4E0A\u4E0B\u6587\u6458\u8981",
+          "/clearctx \u6E05\u9664\u4E0A\u4E0B\u6587\u6458\u8981"
+        ].join("\n");
+        autoResizeInput(true);
+        messageInput.focus();
+        break;
+      }
+    }
+  }
+  async function sendMessage() {
+    const rawText = messageInput.value.trim();
+    if (!rawText && attachments.length === 0) return;
+    if (uiState.sending) return;
+    if (messageInput.dataset.contextMode === "1") {
+      delete messageInput.dataset.contextMode;
+      messageInput.placeholder = "\u7EE7\u7EED\u7ED9 Agent \u53D1\u6D88\u606F... (/ \u8C03\u51FA\u547D\u4EE4)";
+      if (!rawText) return;
+      try {
+        await app.callServerTool({
+          name: "xiaohaha_set_context",
+          arguments: {
+            summary: rawText,
+            conversation_id: uiState.conversationId || void 0
+          }
+        });
+        messageInput.value = "";
+        autoResizeInput();
+        uiState.error = "";
+        uiState.submittedMessage = `\u2705 \u4E0A\u4E0B\u6587\u6458\u8981\u5DF2\u4FDD\u5B58 (${rawText.length} \u5B57)`;
+        render();
+        setTimeout(() => {
+          if (uiState.submittedMessage.startsWith("\u2705")) {
+            uiState.submittedMessage = "";
+            render();
+            messageInput.focus();
+          }
+        }, 2e3);
+      } catch (err) {
+        uiState.error = `\u4FDD\u5B58\u5931\u8D25: ${err instanceof Error ? err.message : "\u672A\u77E5\u9519\u8BEF"}`;
+        render();
+      }
+      return;
+    }
+    const fullMessage = attachments.buildFullMessage(rawText);
+    const previewText = attachments.buildPreviewText(rawText);
     uiState.sending = true;
     uiState.error = "";
     uiState.anyWaiting = false;
     uiState.waiting = false;
     uiState.activeTool = false;
     uiState.completedTool = true;
-    uiState.submittedMessage = message;
+    uiState.submittedMessage = previewText;
     uiState.submittedAt = (/* @__PURE__ */ new Date()).toLocaleTimeString();
     uiState.latestAiMessage = "";
     render();
@@ -14408,28 +15133,27 @@ container holding the app. Specify either width or maxWidth, and either height o
       const result = await app.callServerTool({
         name: "xiaohaha_send_app_message",
         arguments: {
-          message,
+          message: fullMessage,
           instance_id: uiState.instanceId || void 0,
           conversation_id: uiState.conversationId || void 0
         }
       });
       const errorMessage = extractErrorMessage(result);
-      if (errorMessage) {
-        throw new Error(errorMessage);
-      }
+      if (errorMessage) throw new Error(errorMessage);
       const nextState = extractState(result);
       if (nextState) {
         uiState.conversationId = nextState.conversationId || uiState.conversationId;
         uiState.anyWaiting = nextState.anyWaiting;
-        const previewMessage = nextState.previewMessage.trim();
-        uiState.latestAiMessage = getLatestAiMessage(nextState.events);
         uiState.waiting = nextState.waiting;
-        if (previewMessage) {
-          uiState.submittedMessage = previewMessage;
+        uiState.latestAiMessage = getLatestAiMessage(nextState.events);
+        const pm = nextState.previewMessage.trim();
+        if (pm) {
+          uiState.submittedMessage = pm;
           uiState.completedTool = true;
         }
       }
       messageInput.value = "";
+      attachments.clear();
       autoResizeInput();
     } catch (error40) {
       uiState.anyWaiting = true;
@@ -14439,26 +15163,72 @@ container holding the app. Specify either width or maxWidth, and either height o
       uiState.submittedMessage = "";
       uiState.submittedAt = "";
       uiState.error = error40 instanceof Error ? error40.message : "\u53D1\u9001\u5931\u8D25";
-      messageInput.value = message;
+      messageInput.value = rawText;
       autoResizeInput();
     } finally {
       uiState.sending = false;
       render();
-      if (uiState.waiting) {
-        messageInput.focus();
-      }
+      if (uiState.waiting) messageInput.focus();
     }
   }
-  composerForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    void sendMessage();
-  });
-  messageInput.addEventListener("keydown", (event) => {
-    if (event.isComposing || isComposing || event.keyCode === 229) {
+  composerForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (cmdPalette.visible) {
+      const id = cmdPalette.getSelectedCommandId();
+      if (id) executeCommand(id);
       return;
     }
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
+    void sendMessage();
+  });
+  messageInput.addEventListener("keydown", (e) => {
+    if (e.isComposing || isComposing || e.keyCode === 229) return;
+    if (cmdPalette.visible) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        cmdPalette.moveSelection(1);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        cmdPalette.moveSelection(-1);
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const id = cmdPalette.getSelectedCommandId();
+        if (id) executeCommand(id);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cmdPalette.hide();
+        return;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        const label = cmdPalette.getSelectedLabel();
+        if (label) {
+          messageInput.value = label + " ";
+          autoResizeInput(true);
+        }
+        return;
+      }
+    }
+    if (e.key === "Escape" && messageInput.dataset.contextMode === "1") {
+      e.preventDefault();
+      delete messageInput.dataset.contextMode;
+      messageInput.placeholder = "\u7EE7\u7EED\u7ED9 Agent \u53D1\u6D88\u606F... (/ \u8C03\u51FA\u547D\u4EE4)";
+      messageInput.value = "";
+      autoResizeInput(true);
+      return;
+    }
+    if (e.key === "Escape" && attachments.length > 0) {
+      e.preventDefault();
+      attachments.clear();
+      return;
+    }
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
       void sendMessage();
     }
   });
@@ -14471,6 +15241,157 @@ container holding the app. Specify either width or maxWidth, and either height o
   });
   messageInput.addEventListener("input", () => {
     autoResizeInput();
+    cmdPalette.handleInputChange(messageInput.value);
+  });
+  messageInput.addEventListener("paste", async (e) => {
+    const cd = e.clipboardData;
+    if (!cd) return;
+    const items = cd.items ? [...cd.items] : [];
+    const imageItems = items.filter((item) => item.type.startsWith("image/"));
+    if (imageItems.length > 0) {
+      e.preventDefault();
+      const files = imageItems.map((item) => item.getAsFile()).filter(Boolean);
+      await attachments.processFiles(files);
+      return;
+    }
+    const rawText = cd.getData("text/plain");
+    const metaJson = cd.getData("application/vnd.code.copymetadata");
+    if (metaJson && rawText) {
+      e.preventDefault();
+      attachments.processCodeMeta(metaJson, rawText);
+      return;
+    }
+    const metaItem = items.find(
+      (item) => item.type === "application/vnd.code.copymetadata"
+    );
+    if (metaItem && rawText) {
+      e.preventDefault();
+      metaItem.getAsString((json2) => attachments.processCodeMeta(json2, rawText));
+      return;
+    }
+    const vsData = cd.getData("vscode-editor-data");
+    if (vsData && rawText && (rawText.includes("\n") || rawText.length > 80)) {
+      e.preventDefault();
+      let lang = "text";
+      try {
+        lang = JSON.parse(vsData)?.mode || "text";
+      } catch {
+      }
+      const attId = attachments.add({
+        type: "snippet",
+        name: `snippet.${lang}`,
+        content: rawText,
+        mimeType: "text/plain",
+        size: new TextEncoder().encode(rawText).length,
+        filePath: "",
+        lineRef: ""
+      });
+      if (attId > 0) {
+        attachments.updateById(attId, { name: `snippet.${lang} \u23F3` });
+        app.callServerTool({
+          name: "xiaohaha_locate_code",
+          arguments: { code_text: rawText }
+        }).then((result) => {
+          const loc = result?.structuredContent;
+          if (loc?.found) {
+            const fileName = loc.filePath.split("/").pop() || loc.filePath;
+            const lineLabel = loc.startLine === loc.endLine ? `(${loc.startLine})` : `(${loc.startLine}-${loc.endLine})`;
+            attachments.updateById(attId, {
+              name: `${fileName} ${lineLabel}`,
+              filePath: loc.filePath,
+              lineRef: `:${loc.startLine}-${loc.endLine}`
+            });
+          } else {
+            attachments.updateById(attId, { name: `snippet.${lang}` });
+          }
+        }).catch(() => {
+          attachments.updateById(attId, { name: `snippet.${lang}` });
+        });
+      }
+      return;
+    }
+    if (cd.files && cd.files.length > 0) {
+      const nonText = [...cd.files].filter((f) => !f.type.startsWith("text/"));
+      if (nonText.length > 0) {
+        e.preventDefault();
+        await attachments.processFiles(cd.files);
+      }
+    }
+  });
+  inputShell.addEventListener("dragenter", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (++dragCounter === 1) {
+      dragOverlay.hidden = false;
+      inputShell.classList.add("xh-drag-active");
+    }
+  });
+  inputShell.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+  });
+  inputShell.addEventListener("dragleave", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (--dragCounter <= 0) {
+      dragCounter = 0;
+      dragOverlay.hidden = true;
+      inputShell.classList.remove("xh-drag-active");
+    }
+  });
+  inputShell.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter = 0;
+    dragOverlay.hidden = true;
+    inputShell.classList.remove("xh-drag-active");
+    if (e.dataTransfer?.files?.length > 0) {
+      await attachments.processFiles(e.dataTransfer.files);
+      messageInput.focus();
+      return;
+    }
+    const uriData = e.dataTransfer?.getData("text/uri-list") || e.dataTransfer?.getData("application/vnd.code.uri-list") || e.dataTransfer?.getData("text/plain") || "";
+    if (uriData.trim()) {
+      const paths = uriData.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("#")).map((line) => {
+        if (line.startsWith("file://")) {
+          try {
+            return decodeURIComponent(new URL(line).pathname);
+          } catch {
+            return line;
+          }
+        }
+        return line;
+      });
+      if (paths.length > 0) {
+        const refs = paths.map((p) => `@${p}`).join("\n");
+        const cur = messageInput.value;
+        messageInput.value = cur ? cur + (cur.endsWith("\n") ? "" : "\n") + refs : refs;
+        autoResizeInput(true);
+        messageInput.focus();
+      }
+    }
+  });
+  attachFileBtn.addEventListener("click", () => fileInput.click());
+  attachImageBtn.addEventListener("click", () => imageInput.click());
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files.length > 0) {
+      const files = [...fileInput.files];
+      fileInput.value = "";
+      void attachments.processFiles(files);
+    }
+  });
+  imageInput.addEventListener("change", () => {
+    if (imageInput.files.length > 0) {
+      const files = [...imageInput.files];
+      imageInput.value = "";
+      void attachments.processFiles(files);
+    }
+  });
+  document.addEventListener("click", (e) => {
+    if (cmdPalette.visible && !cmdPalette.el.contains(e.target) && e.target !== messageInput) {
+      cmdPalette.hide();
+    }
   });
   app.onteardown = async () => {
     if (pollTimer) {
@@ -14487,8 +15408,8 @@ container holding the app. Specify either width or maxWidth, and either height o
     uiState.submittedMessage = "";
     uiState.submittedAt = "";
     uiState.conversationId = extractConversationIdFromArgs(params?.arguments) || uiState.conversationId;
-    void refreshState().catch((error40) => {
-      uiState.error = error40 instanceof Error ? error40.message : "\u5237\u65B0\u5931\u8D25";
+    void refreshState().catch((err) => {
+      uiState.error = err instanceof Error ? err.message : "\u5237\u65B0\u5931\u8D25";
       render();
     });
   };
@@ -14503,9 +15424,7 @@ container holding the app. Specify either width or maxWidth, and either height o
       uiState.submittedMessage = nextState.previewMessage;
       uiState.submittedAt = "";
     }
-    void refreshState().catch(() => {
-      render();
-    });
+    void refreshState().catch(() => render());
   };
   app.ontoolcancelled = () => {
     uiState.anyWaiting = false;
@@ -14513,9 +15432,7 @@ container holding the app. Specify either width or maxWidth, and either height o
     uiState.activeTool = false;
     render();
   };
-  app.onhostcontextchanged = (hostContext) => {
-    syncHostContext(hostContext);
-  };
+  app.onhostcontextchanged = (hostContext) => syncHostContext(hostContext);
   async function start() {
     render();
     autoResizeInput(true);
@@ -14525,19 +15442,17 @@ container holding the app. Specify either width or maxWidth, and either height o
     render();
     await refreshState();
     pollTimer = window.setInterval(() => {
-      void refreshState().catch((error40) => {
+      void refreshState().catch((err) => {
         uiState.connected = false;
-        uiState.error = error40 instanceof Error ? error40.message : "\u5237\u65B0\u5931\u8D25";
+        uiState.error = err instanceof Error ? err.message : "\u5237\u65B0\u5931\u8D25";
         render();
       });
     }, POLL_INTERVAL_MS);
-    if (uiState.waiting) {
-      messageInput.focus();
-    }
+    if (uiState.waiting) messageInput.focus();
   }
-  start().catch((error40) => {
+  start().catch((err) => {
     uiState.connected = false;
-    uiState.error = error40 instanceof Error ? error40.message : "MCP App \u521D\u59CB\u5316\u5931\u8D25";
+    uiState.error = err instanceof Error ? err.message : "MCP App \u521D\u59CB\u5316\u5931\u8D25";
     render();
   });
 })();

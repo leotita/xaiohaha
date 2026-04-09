@@ -6,7 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "build:app": "mkdir -p app/dist && esbuild app/mcp-chat-ui.js --bundle --format=iife --platform=browser --outfile=app/dist/mcp-chat-ui.bundle.js"
+    "build:app": "mkdir -p app/dist && esbuild app/mcp-chat-ui.js --bundle --format=iife --platform=browser --outfile=app/dist/mcp-chat-ui.bundle.js",
+    "dev": "mkdir -p app/dist && esbuild app/mcp-chat-ui.js --bundle --format=iife --platform=browser --outfile=app/dist/mcp-chat-ui.bundle.js --watch"
   },
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "^1.5.0",

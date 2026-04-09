@@ -55,7 +55,8 @@ npm run build:app
 
 ## 注意事项
 
-- 需要 Node.js 20+
+- 需要 Node.js 22+
+- 推荐安装 [ripgrep](https://github.com/BurntSushi/ripgrep)（`brew install ripgrep`），用于粘贴代码时快速定位文件名和行号。未安装时会自动回退到 Node.js 搜索
 - 默认端口 3456，可通过环境变量 `XIAOHAHA_MCP_PORT` 修改
 - 仅本地使用，无需联网，无需后端服务，无需注册
 - 修改 `app/mcp-chat-ui.js` 后，需要重新执行 `npm run build:app`

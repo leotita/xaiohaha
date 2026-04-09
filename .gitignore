@@ -2,4 +2,5 @@
 .xiaohaha-state.sqlite
 .xiaohaha-state.sqlite-shm
 .xiaohaha-state.sqlite-wal
+.xiaohaha-http.pid
 node_modules

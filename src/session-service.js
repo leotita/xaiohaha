@@ -40,6 +40,8 @@ function createSessionState(conversationId) {
     lastChatEventId: 0,
     toolPreviewByInstanceId: new Map(),
     updatedAt: Date.now(),
+    contextSummary: "",
+    pendingCompact: false,
   };
 }
 
@@ -488,6 +490,11 @@ export class SessionService {
   }
 
   recordAiResponse(session, text) {
+    if (session.pendingCompact) {
+      session.contextSummary = text;
+      session.pendingCompact = false;
+    }
+
     const event = this.recordChatEvent(session, "ai", text);
     session.aiResponses.push({
       id: event.id,
@@ -518,20 +525,25 @@ export class SessionService {
     return message;
   }
 
-  enqueueUserMessage(session, rawMessage) {
+  enqueueUserMessage(session, rawMessage, previewText) {
     const message = rawMessage?.trim();
     if (!session || !message) {
       return false;
     }
 
-    this.recordChatEvent(session, "user", message);
+    if (message.includes("【系统指令 /compact】")) {
+      session.pendingCompact = true;
+    }
+
+    const preview = previewText?.trim() || message;
+    this.recordChatEvent(session, "user", preview);
 
     if (session.waitingResolve) {
       const resolve = session.waitingResolve;
       const activeInstanceId = session.waitingToolInstanceId;
       session.waitingResolve = null;
       session.waitingToolInstanceId = null;
-      this.rememberToolPreviewForCurrentView(session, activeInstanceId, message);
+      this.rememberToolPreviewForCurrentView(session, activeInstanceId, preview);
       resolve(message);
     } else {
       session.messageQueue.push(message);

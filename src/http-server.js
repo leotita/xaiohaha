@@ -1,5 +1,7 @@
+import fs from "node:fs/promises";
 import http from "node:http";
 
+import { BUNDLE_PATH } from "./config.js";
 import { CHAT_PAGE_HTML } from "./http-chat-page.js";
 
 function sendJson(res, statusCode, payload) {
@@ -72,6 +74,16 @@ export function createChatHttpServer({ port, sessionService }) {
 
     if (req.method === "POST" && url.pathname === "/send") {
       handleSendRequest(req, res, sessionService);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/dev/bundle-mtime") {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      fs.stat(BUNDLE_PATH).then((stat) => {
+        sendJson(res, 200, { mtime: stat.mtimeMs });
+      }).catch(() => {
+        sendJson(res, 200, { mtime: 0 });
+      });
       return;
     }
 
