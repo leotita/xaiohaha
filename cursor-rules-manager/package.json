@@ -1,0 +1,63 @@
+{
+  "name": "cursor-rules-manager",
+  "displayName": "Cursor Rules Manager",
+  "description": "Manage your Cursor rules with a visual panel - create, edit, toggle, and organize rules easily",
+  "version": "1.0.0",
+  "publisher": "xiaohaha",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "cursor-rules-manager",
+          "title": "Cursor Rules",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "cursor-rules-manager": [
+        {
+          "type": "webview",
+          "id": "cursorRulesManager.rulesPanel",
+          "name": "Rules Manager"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "cursorRulesManager.refresh",
+        "title": "Refresh Rules",
+        "category": "Cursor Rules",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "cursorRulesManager.createRule",
+        "title": "Create New Rule",
+        "category": "Cursor Rules",
+        "icon": "$(add)"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "npx @vscode/vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^3.2.0"
+  }
+}

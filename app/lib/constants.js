@@ -17,7 +17,7 @@ export const TEXT_EXTENSIONS = new Set([
 export const SLASH_COMMANDS = [
   { id: "file",     label: "/file",     desc: "添加文件附件",              icon: "📎" },
   { id: "image",    label: "/image",    desc: "粘贴或选择图片",            icon: "🖼️" },
-  { id: "compact",  label: "/compact",  desc: "让 AI 生成上下文摘要",      icon: "📦" },
+  { id: "compact",  label: "/compact",  desc: "触发 Cursor 压缩上下文",     icon: "📦", hostCommand: "/compact" },
   { id: "context",  label: "/context",  desc: "手动设置上下文摘要",        icon: "✏️" },
   { id: "clearctx", label: "/clearctx", desc: "清除上下文摘要",            icon: "🧹" },
   { id: "reset",    label: "/reset",    desc: "重新开始，忘记历史",         icon: "🔄", hostCommand: "/new task" },
