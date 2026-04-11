@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { RulesManager } from './rulesManager';
+import { RulesManager, RuleScope } from './rulesManager';
 
 export class RulesViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'cursorRulesManager.rulesPanel';
@@ -33,8 +33,11 @@ export class RulesViewProvider implements vscode.WebviewViewProvider {
         case 'delete': {
           const rule = this.rulesManager.getRule(msg.id);
           if (rule) {
+            const deleteMessage = rule.scope === 'user'
+              ? `Delete rule "${rule.name}"? This will also delete the matching rule from Cursor User Rules.`
+              : `Delete rule "${rule.name}"?`;
             const choice = await vscode.window.showWarningMessage(
-              `Delete rule "${rule.name}"?`, { modal: true }, 'Delete',
+              deleteMessage, { modal: true }, 'Delete',
             );
             if (choice === 'Delete') {
               await this.rulesManager.deleteRule(msg.id);
@@ -59,15 +62,66 @@ export class RulesViewProvider implements vscode.WebviewViewProvider {
           }
           this.refresh();
           break;
+        case 'applyTemplate': {
+          const rule = this.rulesManager.getRule(msg.id);
+          if (!rule) {
+            break;
+          }
+          const target = await vscode.window.showQuickPick(
+            [
+              {
+                label: 'User Rule',
+                description: 'Create a Cursor user rule from this template',
+                scope: 'user' as RuleScope,
+              },
+              {
+                label: 'Project Rule',
+                description: 'Create a workspace rule from this template',
+                scope: 'project' as RuleScope,
+              },
+            ],
+            { placeHolder: `Use "${rule.name}" as...` },
+          );
+          if (target) {
+            const created = await this.rulesManager.cloneRule(msg.id, target.scope);
+            if (created) {
+              vscode.window.showInformationMessage(`Created ${target.label.toLowerCase()} "${created.name}".`);
+              this.refresh();
+            }
+          }
+          break;
+        }
+        case 'favoriteRule': {
+          const sourceRule = this.rulesManager.getRule(msg.id);
+          if (!sourceRule) {
+            break;
+          }
+          const result = await this.rulesManager.toggleFavoriteRule(msg.id);
+          if (result?.favorited) {
+            vscode.window.showInformationMessage(`Saved "${sourceRule.name}" to common templates.`);
+            this.refresh();
+          } else if (result) {
+            vscode.window.showInformationMessage(`Removed "${sourceRule.name}" from common templates.`);
+            this.refresh();
+          }
+          break;
+        }
         case 'getRule': {
           const r = this.rulesManager.getRule(msg.id);
           if (r) {
-            webviewView.webview.postMessage({ type: 'ruleData', rule: r });
+            const editableRule = r.scope === 'common' && r.favoriteSourceId
+              ? this.rulesManager.getRule(r.favoriteSourceId) || r
+              : r;
+            webviewView.webview.postMessage({ type: 'ruleData', rule: editableRule });
           }
           break;
         }
         case 'getRules':
           this.sendRules();
+          break;
+        case 'refreshRules':
+          await this.rulesManager.reconcileUserRules();
+          this.refresh();
           break;
       }
     });
@@ -219,9 +273,9 @@ export class RulesViewProvider implements vscode.WebviewViewProvider {
     /* Rule Card */
     .rule-card {
       display: flex;
-      align-items: flex-start;
-      gap: 8px;
-      padding: 6px 8px;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
       border-radius: var(--radius);
       background: transparent;
       transition: background var(--transition);
@@ -230,6 +284,9 @@ export class RulesViewProvider implements vscode.WebviewViewProvider {
       background: var(--vscode-list-hoverBackground, rgba(90,93,94,0.12));
     }
     .rule-card.disabled { opacity: 0.45; }
+    .rule-card.common {
+      padding-right: 8px;
+    }
 
     /* Toggle */
     .toggle {
@@ -237,8 +294,9 @@ export class RulesViewProvider implements vscode.WebviewViewProvider {
       width: 32px;
       min-width: 32px;
       height: 18px;
-      margin-top: 1px;
       cursor: pointer;
+      flex-shrink: 0;
+      align-self: center;
     }
     .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
     .toggle-track {
@@ -273,12 +331,20 @@ export class RulesViewProvider implements vscode.WebviewViewProvider {
       min-width: 0;
       display: flex;
       flex-direction: column;
-      gap: 2px;
+      gap: 3px;
+    }
+    .rule-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
     }
     .rule-name {
+      flex: 1;
+      min-width: 0;
       font-size: 13px;
       font-weight: 500;
-      line-height: 1.4;
+      line-height: 1.35;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -291,7 +357,7 @@ export class RulesViewProvider implements vscode.WebviewViewProvider {
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .rule-badges { display: flex; gap: 4px; margin-top: 2px; flex-wrap: wrap; }
+    .rule-badges { display: flex; gap: 4px; flex-wrap: wrap; }
     .badge {
       font-size: 10px;
       padding: 1px 5px;
@@ -305,13 +371,61 @@ export class RulesViewProvider implements vscode.WebviewViewProvider {
       color: var(--vscode-button-foreground, #fff);
     }
 
+    .rule-tail {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+    .favorite-btn {
+      opacity: 0.72;
+    }
+    .favorite-btn.active {
+      opacity: 1;
+      color: var(--vscode-button-background, #0078d4);
+      background: var(--vscode-list-activeSelectionBackground, rgba(0,120,212,0.16));
+    }
+    .favorite-btn.active:hover {
+      background: var(--vscode-list-activeSelectionBackground, rgba(0,120,212,0.22));
+    }
+    .mini-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 20px;
+      padding: 0 7px;
+      border: 1px solid var(--vscode-button-border, transparent);
+      border-radius: 999px;
+      background: var(--vscode-button-secondaryBackground, #3a3d41);
+      color: var(--vscode-button-secondaryForeground, #fff);
+      font-size: 10px;
+      line-height: 1;
+      cursor: pointer;
+      opacity: 0.92;
+      transition: opacity var(--transition), background var(--transition);
+    }
+    .mini-btn:hover {
+      opacity: 1;
+      background: var(--vscode-toolbar-hoverBackground, rgba(90,93,94,0.31));
+    }
     .rule-actions {
       display: flex;
       gap: 2px;
-      opacity: 0;
-      transition: opacity var(--transition);
+      flex-shrink: 0;
     }
-    .rule-card:hover .rule-actions { opacity: 1; }
+    .rule-actions .icon-btn {
+      width: 18px;
+      height: 18px;
+    }
+    .rule-actions .icon-btn svg {
+      width: 13px;
+      height: 13px;
+    }
+    .rule-actions .icon-btn,
+    .favorite-btn {
+      flex-shrink: 0;
+    }
 
     /* Editor Overlay */
     .editor-overlay {
@@ -350,6 +464,12 @@ export class RulesViewProvider implements vscode.WebviewViewProvider {
       opacity: 0.85;
       text-transform: uppercase;
       letter-spacing: 0.3px;
+    }
+    .form-hint {
+      font-size: 11px;
+      line-height: 1.4;
+      color: var(--vscode-descriptionForeground, rgba(204,204,204,0.72));
+      opacity: 0.88;
     }
     .form-input,
     .form-textarea,
@@ -459,10 +579,20 @@ export class RulesViewProvider implements vscode.WebviewViewProvider {
         <polyline points="14 2 14 8 20 8"/>
       </svg>
       <p>No rules yet</p>
-      <p class="hint">Click + to create your first rule</p>
+      <p class="hint">Click + to create your first rule or template</p>
     </div>
 
     <div id="sectionsContainer">
+      <div class="section" id="commonSection">
+        <div class="section-header" data-section="common">
+          <div class="section-title">
+            <svg class="chevron" viewBox="0 0 16 16" fill="currentColor"><path d="M5.7 13.7L5 13l4.6-5L5 3l.7-.7L10.4 8z"/></svg>
+            Common Templates
+          </div>
+          <span class="section-count" id="commonCount">0</span>
+        </div>
+        <div class="section-body" id="commonRuleList"></div>
+      </div>
       <div class="section" id="userSection">
         <div class="section-header" data-section="user">
           <div class="section-title">
@@ -500,9 +630,11 @@ export class RulesViewProvider implements vscode.WebviewViewProvider {
       <div class="form-group">
         <label class="form-label" for="ruleScope">Scope</label>
         <select class="form-select" id="ruleScope">
-          <option value="user">User Rule (global)</option>
+          <option value="common">Common Template</option>
+          <option value="user">User Rule (Cursor)</option>
           <option value="project">Project Rule (workspace)</option>
         </select>
+        <div class="form-hint" id="scopeHint"></div>
       </div>
       <div class="form-group">
         <label class="form-label" for="ruleName">Name</label>
@@ -537,7 +669,7 @@ export class RulesViewProvider implements vscode.WebviewViewProvider {
     const vscode = acquireVsCodeApi();
     let currentEditId = null;
     let currentEditScope = null;
-    const collapsedSections = {};
+    const collapsedSections = { common: true };
 
     const $ = (sel) => document.querySelector(sel);
     const emptyStateEl = $('#emptyState');
@@ -545,36 +677,69 @@ export class RulesViewProvider implements vscode.WebviewViewProvider {
     const editorPanel = $('#editorPanel');
     const editorTitle = $('#editorTitle');
     const scopeSelect = $('#ruleScope');
+    const scopeHint = $('#scopeHint');
 
-    function renderRuleCard(rule) {
+    function updateScopeHint() {
+      if (scopeSelect.value === 'user') {
+        scopeHint.textContent = 'Synced to Cursor Settings > Rules > User in real time. Globs are kept here for reference and are not enforced there.';
+        return;
+      }
+      if (scopeSelect.value === 'project') {
+        scopeHint.textContent = 'Saved to workspace .cursor/rules/*.mdc and applied as project rules.';
+        return;
+      }
+      scopeHint.textContent = 'Stored inside the extension as a reusable template.';
+    }
+
+    function renderRuleCard(rule, favoriteRuleIds) {
+      const isCommon = rule.scope === 'common';
+      const isFavorited = !isCommon && favoriteRuleIds.has(rule.id);
       const badges = [];
       if (rule.alwaysApply) badges.push('<span class="badge active">Always</span>');
       if (rule.globs) badges.push('<span class="badge">' + escHtml(rule.globs) + '</span>');
 
-      return '<div class="rule-card' + (rule.enabled ? '' : ' disabled') + '" data-id="' + rule.id + '">'
-        + '<label class="toggle">'
+      const leadingToggle = isCommon ? '' : ''
+        + '<label class="toggle" title="' + (rule.enabled ? 'Disable rule' : 'Enable rule') + '">'
         + '  <input type="checkbox" ' + (rule.enabled ? 'checked' : '') + ' data-toggle="' + rule.id + '"/>'
         + '  <div class="toggle-track"><div class="toggle-thumb"></div></div>'
-        + '</label>'
+        + '</label>';
+      const trailingPrimary = isCommon
+        ? '<button class="mini-btn" data-apply="' + rule.id + '" title="Create a rule from this template">Use</button>'
+        : '<button class="icon-btn favorite-btn' + (isFavorited ? ' active' : '') + '" data-favorite="' + rule.id + '" title="'
+          + (isFavorited ? 'Remove from common templates' : 'Save as common template') + '">'
+        + '  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">'
+        + '    <path d="M8 1.9l1.8 3.65 4.02.59-2.91 2.83.69 4-3.6-1.89-3.6 1.89.69-4-2.91-2.83 4.02-.59z"/>'
+        + '  </svg>'
+        + '</button>';
+
+      return '<div class="rule-card' + (rule.enabled ? '' : ' disabled') + (isCommon ? ' common' : '') + '" data-id="' + rule.id + '">'
+        + leadingToggle
         + '<div class="rule-info">'
-        + '  <div class="rule-name">' + escHtml(rule.name) + '</div>'
+        + '  <div class="rule-head">'
+        + '    <div class="rule-name">' + escHtml(rule.name) + '</div>'
+        + '  </div>'
         + (rule.description ? '  <div class="rule-desc">' + escHtml(rule.description) + '</div>' : '')
         + (badges.length ? '  <div class="rule-badges">' + badges.join('') + '</div>' : '')
         + '</div>'
-        + '<div class="rule-actions">'
-        + '  <button class="icon-btn" data-edit="' + rule.id + '" title="Edit">'
-        + '    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11.5 1.5l3 3L5 14H2v-3z"/></svg>'
-        + '  </button>'
-        + '  <button class="icon-btn" data-delete="' + rule.id + '" title="Delete">'
-        + '    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="3 6 5 6 13 6"/><path d="M5 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/><path d="M4 6l1 8h6l1-8"/></svg>'
-        + '  </button>'
+        + '<div class="rule-tail">'
+        + trailingPrimary
+        + '  <div class="rule-actions">'
+        + '    <button class="icon-btn" data-edit="' + rule.id + '" title="Edit">'
+        + '      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11.5 1.5l3 3L5 14H2v-3z"/></svg>'
+        + '    </button>'
+        + '    <button class="icon-btn" data-delete="' + rule.id + '" title="Delete">'
+        + '      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="3 6 5 6 13 6"/><path d="M5 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/><path d="M4 6l1 8h6l1-8"/></svg>'
+        + '    </button>'
+        + '  </div>'
         + '</div>'
         + '</div>';
     }
 
     function renderRules(rules) {
+      const commonRules = rules.filter(r => r.scope === 'common');
       const userRules = rules.filter(r => r.scope === 'user');
       const projectRules = rules.filter(r => r.scope === 'project');
+      const favoriteRuleIds = new Set(commonRules.filter(r => r.favoriteSourceId).map(r => r.favoriteSourceId));
 
       if (rules.length === 0) {
         sectionsEl.style.display = 'none';
@@ -584,18 +749,40 @@ export class RulesViewProvider implements vscode.WebviewViewProvider {
       sectionsEl.style.display = 'block';
       emptyStateEl.style.display = 'none';
 
+      $('#commonCount').textContent = commonRules.length;
       $('#userCount').textContent = userRules.length;
       $('#projectCount').textContent = projectRules.length;
 
+      if (commonRules.length === 0) {
+        collapsedSections.common = true;
+      } else if (collapsedSections.common === undefined) {
+        collapsedSections.common = true;
+      }
+      if (userRules.length === 0) {
+        collapsedSections.user = true;
+      } else if (collapsedSections.user === undefined) {
+        collapsedSections.user = false;
+      }
+      if (projectRules.length === 0) {
+        collapsedSections.project = true;
+      } else if (collapsedSections.project === undefined) {
+        collapsedSections.project = false;
+      }
+
+      const commonList = $('#commonRuleList');
       const userList = $('#userRuleList');
       const projectList = $('#projectRuleList');
 
+      commonList.innerHTML = commonRules.length
+        ? commonRules.map(rule => renderRuleCard(rule, favoriteRuleIds)).join('')
+        : '<div class="section-empty">No common templates</div>';
+
       userList.innerHTML = userRules.length
-        ? userRules.map(renderRuleCard).join('')
-        : '<div class="section-empty">No user rules</div>';
+        ? userRules.map(rule => renderRuleCard(rule, favoriteRuleIds)).join('')
+        : '<div class="section-empty">No Cursor user rules</div>';
 
       projectList.innerHTML = projectRules.length
-        ? projectRules.map(renderRuleCard).join('')
+        ? projectRules.map(rule => renderRuleCard(rule, favoriteRuleIds)).join('')
         : '<div class="section-empty">No project rules</div>';
 
       updateChevrons();
@@ -628,6 +815,7 @@ export class RulesViewProvider implements vscode.WebviewViewProvider {
       editorTitle.textContent = rule ? 'Edit Rule' : 'Create Rule';
       scopeSelect.value = rule ? rule.scope : 'project';
       scopeSelect.disabled = !!rule;
+      updateScopeHint();
       $('#ruleName').value = rule ? rule.name : '';
       $('#ruleDesc').value = rule ? rule.description : '';
       $('#ruleGlobs').value = rule ? rule.globs : '';
@@ -681,6 +869,16 @@ export class RulesViewProvider implements vscode.WebviewViewProvider {
     });
 
     sectionsEl.addEventListener('click', (e) => {
+      const apply = e.target.closest('[data-apply]');
+      if (apply) {
+        vscode.postMessage({ type: 'applyTemplate', id: apply.dataset.apply });
+        return;
+      }
+      const favorite = e.target.closest('[data-favorite]');
+      if (favorite) {
+        vscode.postMessage({ type: 'favoriteRule', id: favorite.dataset.favorite });
+        return;
+      }
       const btn = e.target.closest('[data-edit]');
       if (btn) {
         vscode.postMessage({ type: 'getRule', id: btn.dataset.edit });
@@ -693,10 +891,11 @@ export class RulesViewProvider implements vscode.WebviewViewProvider {
     });
 
     $('#btnAdd').addEventListener('click', () => openEditor(null));
-    $('#btnRefresh').addEventListener('click', () => vscode.postMessage({ type: 'getRules' }));
+    $('#btnRefresh').addEventListener('click', () => vscode.postMessage({ type: 'refreshRules' }));
     $('#btnCloseEditor').addEventListener('click', closeEditor);
     $('#btnCancel').addEventListener('click', closeEditor);
     $('#btnSave').addEventListener('click', saveRule);
+    scopeSelect.addEventListener('change', updateScopeHint);
 
     $('#ruleName').addEventListener('input', (e) => { e.target.style.borderColor = ''; });
 
@@ -716,6 +915,7 @@ export class RulesViewProvider implements vscode.WebviewViewProvider {
     });
 
     vscode.postMessage({ type: 'getRules' });
+    updateScopeHint();
   </script>
 </body>
 </html>`;

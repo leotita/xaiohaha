@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
+const path = __importStar(require("path"));
 const rulesManager_1 = require("./rulesManager");
 const rulesViewProvider_1 = require("./rulesViewProvider");
 function activate(context) {
@@ -43,15 +44,21 @@ function activate(context) {
     if (!workspaceFolders || workspaceFolders.length === 0) {
         return;
     }
+    const outputChannel = vscode.window.createOutputChannel('Cursor Rules Manager');
     const workspaceRoot = workspaceFolders[0].uri.fsPath;
     const rulesManager = new rulesManager_1.RulesManager(workspaceRoot);
     rulesManager.setGlobalState(context.globalState);
+    rulesManager.setSharedStorageDbPath(path.join(path.dirname(context.globalStorageUri.fsPath), 'state.vscdb'));
+    rulesManager.setOutputChannel(outputChannel);
+    outputChannel.appendLine(`[${new Date().toISOString()}] Cursor Rules Manager activated.`);
     rulesManager.syncFromDisk();
+    void rulesManager.reconcileUserRules();
     const provider = new rulesViewProvider_1.RulesViewProvider(context.extensionUri, rulesManager);
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(rulesViewProvider_1.RulesViewProvider.viewType, provider, {
         webviewOptions: { retainContextWhenHidden: true },
     }));
-    context.subscriptions.push(vscode.commands.registerCommand('cursorRulesManager.refresh', () => {
+    context.subscriptions.push(vscode.commands.registerCommand('cursorRulesManager.refresh', async () => {
+        await rulesManager.reconcileUserRules();
         provider.refresh();
     }));
     context.subscriptions.push(vscode.commands.registerCommand('cursorRulesManager.createRule', () => {
@@ -62,6 +69,7 @@ function activate(context) {
     watcher.onDidChange(() => provider.refresh());
     watcher.onDidDelete(() => provider.refresh());
     context.subscriptions.push(watcher);
+    context.subscriptions.push(outputChannel);
     context.subscriptions.push(rulesManager);
 }
 function deactivate() { }
