@@ -159,6 +159,7 @@ function buildChatAppHtml(bundle) {
       <form class="xh-form" id="composerForm">
         <div class="xh-input-shell" id="inputShell">
           <div class="xh-attachments" id="attachmentBar" hidden></div>
+          <div class="xh-fake-caret" id="fakeCaret" hidden></div>
           <textarea
             class="xh-input"
             id="messageInput"
@@ -166,6 +167,9 @@ function buildChatAppHtml(bundle) {
             placeholder="继续给 Agent 发消息... (/ 调出命令)"
           ></textarea>
           <div class="xh-input-actions">
+            <button class="xh-action-btn" id="openBrowserBtn" type="button" title="在浏览器继续输入">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg>
+            </button>
             <button class="xh-action-btn" id="attachFileBtn" type="button" title="添加文件">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
             </button>
@@ -183,6 +187,7 @@ function buildChatAppHtml(bundle) {
       <div class="xh-error" id="errorBanner" hidden></div>
     </div>
   </div>
+  <script>window.__XIAOHAHA_BROWSER_CHAT_URL = ${JSON.stringify(BASE_URL)};</script>
   <script>${escapeInlineScript(bundle)}</script>
 ${DEV_MODE ? `  <script>
     (function(){

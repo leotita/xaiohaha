@@ -14126,6 +14126,11 @@ container holding the app. Specify either width or maxWidth, and either height o
     box-shadow: 0 0 0 1px var(--xh-ring);
   }
 
+  .xh-input-shell.xh-pseudo-focus {
+    border-color: var(--xh-border-strong);
+    box-shadow: 0 0 0 1px var(--xh-ring);
+  }
+
   .xh-input-shell.xh-drag-active {
     border-color: var(--xh-accent);
     box-shadow: 0 0 0 2px var(--xh-accent-soft);
@@ -14163,6 +14168,27 @@ container holding the app. Specify either width or maxWidth, and either height o
     border: 0;
     box-shadow: none;
     background: transparent;
+  }
+
+  .xh-fake-caret {
+    position: absolute;
+    top: 17px;
+    left: 18px;
+    width: 1.5px;
+    height: 24px;
+    border-radius: 999px;
+    background: rgba(232, 236, 248, 0.95);
+    pointer-events: none;
+    animation: xh-caret-blink 1s step-end infinite;
+  }
+
+  .xh-fake-caret[hidden] {
+    display: none;
+  }
+
+  @keyframes xh-caret-blink {
+    0%, 45% { opacity: 1; }
+    46%, 100% { opacity: 0; }
   }
 
   .xh-preview {
@@ -14829,6 +14855,7 @@ ${att.content}
   var styleEl = document.createElement("style");
   styleEl.textContent = STYLES;
   document.head.appendChild(styleEl);
+  var BROWSER_CHAT_BASE_URL = typeof window.__XIAOHAHA_BROWSER_CHAT_URL === "string" ? window.__XIAOHAHA_BROWSER_CHAT_URL : "";
   var root = document.getElementById("app");
   if (!root) throw new Error("Missing #app mount element.");
   var needsFullDom = !root.querySelector("#inputShell") || !root.querySelector("#cmdPalette") || root.querySelector("#cmdPalette")?.closest("#inputShell");
@@ -14840,6 +14867,7 @@ ${att.content}
       <form class="xh-form" id="composerForm">
         <div class="xh-input-shell" id="inputShell">
           <div class="xh-attachments" id="attachmentBar" hidden></div>
+          <div class="xh-fake-caret" id="fakeCaret" hidden></div>
           <textarea
             class="xh-input"
             id="messageInput"
@@ -14847,6 +14875,9 @@ ${att.content}
             placeholder="\u7EE7\u7EED\u7ED9 Agent \u53D1\u6D88\u606F... (/ \u8C03\u51FA\u547D\u4EE4)"
           ></textarea>
           <div class="xh-input-actions">
+            <button class="xh-action-btn" id="openBrowserBtn" type="button" title="\u5728\u6D4F\u89C8\u5668\u7EE7\u7EED\u8F93\u5165">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg>
+            </button>
             <button class="xh-action-btn" id="attachFileBtn" type="button" title="\u6DFB\u52A0\u6587\u4EF6">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
             </button>
@@ -14870,6 +14901,9 @@ ${att.content}
   var sentPreview = document.getElementById("sentPreview");
   var errorBanner = document.getElementById("errorBanner");
   var inputShell = document.getElementById("inputShell");
+  var attachmentBar = document.getElementById("attachmentBar");
+  var fakeCaret = document.getElementById("fakeCaret");
+  var openBrowserBtn = document.getElementById("openBrowserBtn");
   var attachFileBtn = document.getElementById("attachFileBtn");
   var attachImageBtn = document.getElementById("attachImageBtn");
   var fileInput = document.getElementById("fileInput");
@@ -14893,7 +14927,7 @@ ${att.content}
   var pollTimer = null;
   var isComposing = false;
   var dragCounter = 0;
-  var attachments = new AttachmentManager(document.getElementById("attachmentBar"));
+  var attachments = new AttachmentManager(attachmentBar);
   attachments.onError = (msg) => {
     uiState.error = msg;
     render();
@@ -14907,6 +14941,33 @@ ${att.content}
       INPUT_MIN_HEIGHT_PX,
       Math.min(messageInput.scrollHeight, INPUT_MAX_HEIGHT_PX)
     )}px`;
+  }
+  function updateFakeCaret() {
+    const showComposer = !uiState.submittedMessage;
+    const hasRealFocus = document.activeElement === messageInput;
+    const showFakeCaret = showComposer && uiState.connected && !uiState.sending && !hasRealFocus && !messageInput.value && attachmentBar.hidden;
+    fakeCaret.hidden = !showFakeCaret;
+    inputShell.classList.toggle("xh-pseudo-focus", showFakeCaret);
+  }
+  async function openBrowserChat() {
+    if (!BROWSER_CHAT_BASE_URL) {
+      uiState.error = "\u6D4F\u89C8\u5668\u804A\u5929\u5730\u5740\u4E0D\u53EF\u7528";
+      render();
+      return;
+    }
+    const url2 = new URL(BROWSER_CHAT_BASE_URL);
+    if (uiState.conversationId) {
+      url2.searchParams.set("conversationId", uiState.conversationId);
+    }
+    try {
+      const result = await app.openLink({ url: url2.toString() });
+      if (result?.isError) throw new Error("\u5BBF\u4E3B\u62D2\u7EDD\u6253\u5F00\u94FE\u63A5");
+      uiState.error = "";
+      render();
+    } catch {
+      uiState.error = `\u6253\u5F00\u6D4F\u89C8\u5668\u5931\u8D25\uFF0C\u8BF7\u624B\u52A8\u8BBF\u95EE: ${url2.toString()}`;
+      render();
+    }
   }
   function syncHostContext(hostContext) {
     if (hostContext?.theme) PQ(hostContext.theme);
@@ -14979,6 +15040,7 @@ ${att.content}
       sentPreview.innerHTML = "";
       messageInput.disabled = uiState.sending;
     }
+    updateFakeCaret();
   }
   async function refreshState() {
     const result = await app.callServerTool({
@@ -15241,6 +15303,13 @@ ${att.content}
   messageInput.addEventListener("input", () => {
     autoResizeInput();
     cmdPalette.handleInputChange(messageInput.value);
+    updateFakeCaret();
+  });
+  messageInput.addEventListener("focus", () => {
+    updateFakeCaret();
+  });
+  messageInput.addEventListener("blur", () => {
+    updateFakeCaret();
   });
   messageInput.addEventListener("paste", async (e) => {
     const cd = e.clipboardData;
@@ -15251,6 +15320,7 @@ ${att.content}
       e.preventDefault();
       const files = imageItems.map((item) => item.getAsFile()).filter(Boolean);
       await attachments.processFiles(files);
+      updateFakeCaret();
       return;
     }
     const rawText = cd.getData("text/plain");
@@ -15348,6 +15418,7 @@ ${att.content}
     if (e.dataTransfer?.files?.length > 0) {
       await attachments.processFiles(e.dataTransfer.files);
       messageInput.focus();
+      updateFakeCaret();
       return;
     }
     const uriData = e.dataTransfer?.getData("text/uri-list") || e.dataTransfer?.getData("application/vnd.code.uri-list") || e.dataTransfer?.getData("text/plain") || "";
@@ -15371,20 +15442,23 @@ ${att.content}
       }
     }
   });
+  openBrowserBtn.addEventListener("click", () => {
+    void openBrowserChat();
+  });
   attachFileBtn.addEventListener("click", () => fileInput.click());
   attachImageBtn.addEventListener("click", () => imageInput.click());
   fileInput.addEventListener("change", () => {
     if (fileInput.files.length > 0) {
       const files = [...fileInput.files];
       fileInput.value = "";
-      void attachments.processFiles(files);
+      void attachments.processFiles(files).finally(() => updateFakeCaret());
     }
   });
   imageInput.addEventListener("change", () => {
     if (imageInput.files.length > 0) {
       const files = [...imageInput.files];
       imageInput.value = "";
-      void attachments.processFiles(files);
+      void attachments.processFiles(files).finally(() => updateFakeCaret());
     }
   });
   document.addEventListener("click", (e) => {
@@ -15447,7 +15521,6 @@ ${att.content}
         render();
       });
     }, POLL_INTERVAL_MS);
-    if (uiState.waiting) messageInput.focus();
   }
   start().catch((err) => {
     uiState.connected = false;

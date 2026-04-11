@@ -17,6 +17,10 @@ const styleEl = document.createElement("style");
 styleEl.textContent = STYLES;
 document.head.appendChild(styleEl);
 
+const BROWSER_CHAT_BASE_URL = typeof window.__XIAOHAHA_BROWSER_CHAT_URL === "string"
+  ? window.__XIAOHAHA_BROWSER_CHAT_URL
+  : "";
+
 /* ═══════════════════════════════════════════════════
    DOM Setup
    ═══════════════════════════════════════════════════ */
@@ -33,6 +37,7 @@ if (needsFullDom) {
       <form class="xh-form" id="composerForm">
         <div class="xh-input-shell" id="inputShell">
           <div class="xh-attachments" id="attachmentBar" hidden></div>
+          <div class="xh-fake-caret" id="fakeCaret" hidden></div>
           <textarea
             class="xh-input"
             id="messageInput"
@@ -40,6 +45,9 @@ if (needsFullDom) {
             placeholder="继续给 Agent 发消息... (/ 调出命令)"
           ></textarea>
           <div class="xh-input-actions">
+            <button class="xh-action-btn" id="openBrowserBtn" type="button" title="在浏览器继续输入">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg>
+            </button>
             <button class="xh-action-btn" id="attachFileBtn" type="button" title="添加文件">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
             </button>
@@ -64,6 +72,9 @@ const messageInput = document.getElementById("messageInput");
 const sentPreview = document.getElementById("sentPreview");
 const errorBanner = document.getElementById("errorBanner");
 const inputShell = document.getElementById("inputShell");
+const attachmentBar = document.getElementById("attachmentBar");
+const fakeCaret = document.getElementById("fakeCaret");
+const openBrowserBtn = document.getElementById("openBrowserBtn");
 const attachFileBtn = document.getElementById("attachFileBtn");
 const attachImageBtn = document.getElementById("attachImageBtn");
 const fileInput = document.getElementById("fileInput");
@@ -97,7 +108,7 @@ let dragCounter = 0;
 
 /* ── Managers ── */
 
-const attachments = new AttachmentManager(document.getElementById("attachmentBar"));
+const attachments = new AttachmentManager(attachmentBar);
 attachments.onError = (msg) => {
   uiState.error = msg;
   render();
@@ -117,6 +128,43 @@ function autoResizeInput(force = false) {
     INPUT_MIN_HEIGHT_PX,
     Math.min(messageInput.scrollHeight, INPUT_MAX_HEIGHT_PX)
   )}px`;
+}
+
+function updateFakeCaret() {
+  const showComposer = !uiState.submittedMessage;
+  const hasRealFocus = document.activeElement === messageInput;
+  const showFakeCaret = showComposer
+    && uiState.connected
+    && !uiState.sending
+    && !hasRealFocus
+    && !messageInput.value
+    && attachmentBar.hidden;
+
+  fakeCaret.hidden = !showFakeCaret;
+  inputShell.classList.toggle("xh-pseudo-focus", showFakeCaret);
+}
+
+async function openBrowserChat() {
+  if (!BROWSER_CHAT_BASE_URL) {
+    uiState.error = "浏览器聊天地址不可用";
+    render();
+    return;
+  }
+
+  const url = new URL(BROWSER_CHAT_BASE_URL);
+  if (uiState.conversationId) {
+    url.searchParams.set("conversationId", uiState.conversationId);
+  }
+
+  try {
+    const result = await app.openLink({ url: url.toString() });
+    if (result?.isError) throw new Error("宿主拒绝打开链接");
+    uiState.error = "";
+    render();
+  } catch {
+    uiState.error = `打开浏览器失败，请手动访问: ${url.toString()}`;
+    render();
+  }
 }
 
 function syncHostContext(hostContext) {
@@ -206,6 +254,8 @@ function render() {
     sentPreview.innerHTML = "";
     messageInput.disabled = uiState.sending;
   }
+
+  updateFakeCaret();
 }
 
 /* ═══════════════════════════════════════════════════
@@ -489,7 +539,10 @@ messageInput.addEventListener("compositionend", () => { isComposing = false; aut
 messageInput.addEventListener("input", () => {
   autoResizeInput();
   cmdPalette.handleInputChange(messageInput.value);
+  updateFakeCaret();
 });
+messageInput.addEventListener("focus", () => { updateFakeCaret(); });
+messageInput.addEventListener("blur", () => { updateFakeCaret(); });
 
 messageInput.addEventListener("paste", async (e) => {
   const cd = e.clipboardData;
@@ -502,6 +555,7 @@ messageInput.addEventListener("paste", async (e) => {
     e.preventDefault();
     const files = imageItems.map((item) => item.getAsFile()).filter(Boolean);
     await attachments.processFiles(files);
+    updateFakeCaret();
     return;
   }
 
@@ -592,11 +646,12 @@ inputShell.addEventListener("drop", async (e) => {
   e.preventDefault(); e.stopPropagation();
   dragCounter = 0; dragOverlay.hidden = true; inputShell.classList.remove("xh-drag-active");
 
-  if (e.dataTransfer?.files?.length > 0) {
-    await attachments.processFiles(e.dataTransfer.files);
-    messageInput.focus();
-    return;
-  }
+    if (e.dataTransfer?.files?.length > 0) {
+      await attachments.processFiles(e.dataTransfer.files);
+      messageInput.focus();
+      updateFakeCaret();
+      return;
+    }
 
   const uriData = e.dataTransfer?.getData("text/uri-list")
     || e.dataTransfer?.getData("application/vnd.code.uri-list")
@@ -625,20 +680,23 @@ inputShell.addEventListener("drop", async (e) => {
 });
 
 /* ── Action buttons & file inputs ── */
+openBrowserBtn.addEventListener("click", () => {
+  void openBrowserChat();
+});
 attachFileBtn.addEventListener("click", () => fileInput.click());
 attachImageBtn.addEventListener("click", () => imageInput.click());
 fileInput.addEventListener("change", () => {
   if (fileInput.files.length > 0) {
     const files = [...fileInput.files];
     fileInput.value = "";
-    void attachments.processFiles(files);
+    void attachments.processFiles(files).finally(() => updateFakeCaret());
   }
 });
 imageInput.addEventListener("change", () => {
   if (imageInput.files.length > 0) {
     const files = [...imageInput.files];
     imageInput.value = "";
-    void attachments.processFiles(files);
+    void attachments.processFiles(files).finally(() => updateFakeCaret());
   }
 });
 
@@ -691,7 +749,6 @@ async function start() {
       uiState.connected = false; uiState.error = err instanceof Error ? err.message : "刷新失败"; render();
     });
   }, POLL_INTERVAL_MS);
-  if (uiState.waiting) messageInput.focus();
 }
 
 start().catch((err) => {

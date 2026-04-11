@@ -74,6 +74,11 @@ export const STYLES = `
     box-shadow: 0 0 0 1px var(--xh-ring);
   }
 
+  .xh-input-shell.xh-pseudo-focus {
+    border-color: var(--xh-border-strong);
+    box-shadow: 0 0 0 1px var(--xh-ring);
+  }
+
   .xh-input-shell.xh-drag-active {
     border-color: var(--xh-accent);
     box-shadow: 0 0 0 2px var(--xh-accent-soft);
@@ -111,6 +116,27 @@ export const STYLES = `
     border: 0;
     box-shadow: none;
     background: transparent;
+  }
+
+  .xh-fake-caret {
+    position: absolute;
+    top: 17px;
+    left: 18px;
+    width: 1.5px;
+    height: 24px;
+    border-radius: 999px;
+    background: rgba(232, 236, 248, 0.95);
+    pointer-events: none;
+    animation: xh-caret-blink 1s step-end infinite;
+  }
+
+  .xh-fake-caret[hidden] {
+    display: none;
+  }
+
+  @keyframes xh-caret-blink {
+    0%, 45% { opacity: 1; }
+    46%, 100% { opacity: 0; }
   }
 
   .xh-preview {
