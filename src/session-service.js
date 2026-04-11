@@ -32,6 +32,7 @@ function createSessionState(conversationId) {
   return {
     conversationId,
     waitingResolve: null,
+    waitingClientSessionId: null,
     waitingToolInstanceId: null,
     currentAppInstanceId: null,
     messageQueue: [],
@@ -188,6 +189,7 @@ export class SessionService {
   constructor() {
     this.sessions = new Map();
     this.toolInstanceToConversationId = new Map();
+    this.clientSessionToConversationId = new Map();
     this.db = new DatabaseSync(STATE_DB_PATH);
 
     this.db.exec(`
@@ -372,6 +374,29 @@ export class SessionService {
     session.updatedAt = Date.now();
   }
 
+  takeWaitingState(session) {
+    if (!session) {
+      return null;
+    }
+
+    if (!session.waitingResolve) {
+      session.waitingClientSessionId = null;
+      session.waitingToolInstanceId = null;
+      return null;
+    }
+
+    const waitingState = {
+      resolve: session.waitingResolve,
+      activeInstanceId: session.waitingToolInstanceId,
+    };
+
+    session.waitingResolve = null;
+    session.waitingClientSessionId = null;
+    session.waitingToolInstanceId = null;
+
+    return waitingState;
+  }
+
   getSession(conversationId) {
     const normalizedConversationId = normalizeConversationId(conversationId);
     if (!normalizedConversationId) {
@@ -407,6 +432,17 @@ export class SessionService {
     this.persistToolInstanceBinding(normalizedInstanceId, normalizedConversationId);
   }
 
+  bindClientSessionToConversation(clientSessionId, conversationId) {
+    const normalizedClientSessionId = normalizeInstanceId(clientSessionId);
+    const normalizedConversationId = normalizeConversationId(conversationId);
+
+    if (!normalizedClientSessionId || !normalizedConversationId) {
+      return;
+    }
+
+    this.clientSessionToConversationId.set(normalizedClientSessionId, normalizedConversationId);
+  }
+
   bindAppInstanceToSession(session, instanceId) {
     const normalizedInstanceId = normalizeInstanceId(instanceId);
     if (!session || !normalizedInstanceId) {
@@ -427,14 +463,25 @@ export class SessionService {
     return this.toolInstanceToConversationId.get(normalizedInstanceId) || null;
   }
 
+  resolveConversationIdForClientSession(clientSessionId) {
+    const normalizedClientSessionId = normalizeInstanceId(clientSessionId);
+    if (!normalizedClientSessionId) {
+      return null;
+    }
+
+    return this.clientSessionToConversationId.get(normalizedClientSessionId) || null;
+  }
+
   getSingleWaitingSession() {
     const waitingSessions = [...this.sessions.values()].filter((session) => session.waitingResolve !== null);
     return waitingSessions.length === 1 ? waitingSessions[0] : null;
   }
 
-  resolveSession({ conversationId, instanceId, createIfMissing = false } = {}) {
+  resolveSession({ conversationId, instanceId, clientSessionId, createIfMissing = false } = {}) {
     const normalizedConversationId =
-      normalizeConversationId(conversationId) || this.resolveConversationIdForInstance(instanceId);
+      normalizeConversationId(conversationId)
+      || this.resolveConversationIdForInstance(instanceId)
+      || this.resolveConversationIdForClientSession(clientSessionId);
 
     if (normalizedConversationId) {
       return createIfMissing
@@ -504,8 +551,13 @@ export class SessionService {
     this.persistAiResponse(session, session.aiResponses[session.aiResponses.length - 1]);
   }
 
-  waitForNextMessage(session, instanceId) {
+  waitForNextMessage(session, instanceId, clientSessionId) {
+    if (session.waitingResolve) {
+      this.takeWaitingState(session)?.resolve(null);
+    }
+
     session.waitingToolInstanceId = normalizeInstanceId(instanceId);
+    session.waitingClientSessionId = normalizeInstanceId(clientSessionId);
     this.touchSession(session);
 
     // MCP 侧会在这里挂起，直到浏览器输入到达；这样可以保持“回复后立即继续等待下一条指令”的交互模式。
@@ -539,12 +591,10 @@ export class SessionService {
     this.recordChatEvent(session, "user", preview);
 
     if (session.waitingResolve) {
-      const resolve = session.waitingResolve;
-      const activeInstanceId = session.waitingToolInstanceId;
-      session.waitingResolve = null;
-      session.waitingToolInstanceId = null;
+      const waitingState = this.takeWaitingState(session);
+      const activeInstanceId = waitingState?.activeInstanceId || null;
       this.rememberToolPreviewForCurrentView(session, activeInstanceId, preview);
-      resolve(message);
+      waitingState?.resolve(message);
     } else {
       session.messageQueue.push(message);
       this.touchSession(session);
@@ -553,8 +603,40 @@ export class SessionService {
     return true;
   }
 
-  getChatState({ conversationId, instanceId } = {}) {
-    const session = this.resolveSession({ conversationId, instanceId });
+  cancelPendingWaitsForClientSession(clientSessionId) {
+    const normalizedClientSessionId = normalizeInstanceId(clientSessionId);
+    if (!normalizedClientSessionId) {
+      return 0;
+    }
+
+    let cleared = 0;
+
+    for (const session of this.sessions.values()) {
+      if (session.waitingClientSessionId !== normalizedClientSessionId) {
+        continue;
+      }
+
+      this.takeWaitingState(session)?.resolve(null);
+      cleared += 1;
+    }
+
+    return cleared;
+  }
+
+  getDiagnostics() {
+    const sessions = [...this.sessions.values()];
+    const waitingSessions = sessions.filter((session) => session.waitingResolve !== null).length;
+    const queuedMessages = sessions.reduce((total, session) => total + session.messageQueue.length, 0);
+
+    return {
+      sessions: sessions.length,
+      waitingSessions,
+      queuedMessages,
+    };
+  }
+
+  getChatState({ conversationId, instanceId, clientSessionId } = {}) {
+    const session = this.resolveSession({ conversationId, instanceId, clientSessionId });
     const normalizedInstanceId = normalizeInstanceId(instanceId);
 
     if (!session) {

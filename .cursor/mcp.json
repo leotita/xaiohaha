@@ -1,3 +1,7 @@
 {
-  "mcpServers": {}
+  "mcpServers": {
+    "xiaohaha-mcp": {
+      "url": "http://127.0.0.1:13456/mcp"
+    }
+  }
 }

@@ -4,3 +4,4 @@
 .xiaohaha-state.sqlite-wal
 .xiaohaha-http.pid
 node_modules
+cursor-rules-manager/*.vsix

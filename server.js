@@ -1,35 +1,57 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import http from "node:http";
 
-import { PORT } from "./src/config.js";
+import { BASE_URL, HOST, MCP_ENDPOINT_URL, PORT } from "./src/config.js";
 import { createChatHttpServer } from "./src/http-server.js";
-import { registerChatAppIntegration } from "./src/mcp-app.js";
-import { debugLog, listenHttpServerWithFallback, registerShutdownHandlers } from "./src/process-manager.js";
+import { debugLog, registerShutdownHandlers } from "./src/process-manager.js";
 import { SessionService } from "./src/session-service.js";
 
+async function listen(server, port, host) {
+  return new Promise((resolve, reject) => {
+    const handleError = (error) => {
+      cleanup();
+      reject(error);
+    };
+
+    const handleListening = () => {
+      cleanup();
+      resolve();
+    };
+
+    const cleanup = () => {
+      server.off("error", handleError);
+      server.off("listening", handleListening);
+    };
+
+    server.once("error", handleError);
+    server.once("listening", handleListening);
+    server.listen(port, host);
+  });
+}
+
 async function start() {
-  // 入口文件只负责组装依赖和启动顺序，具体实现下沉到独立模块，避免再次膨胀。
   const sessionService = new SessionService();
   await sessionService.initialize();
 
-  const mcpServer = new McpServer({
-    name: "xiaohaha-message",
-    version: "1.0.0",
+  const runtime = createChatHttpServer({ sessionService });
+  const httpServer = http.createServer(runtime.app);
+
+  registerShutdownHandlers(async () => {
+    await runtime.close();
+    await new Promise((resolve, reject) => {
+      httpServer.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
   });
 
-  registerChatAppIntegration(mcpServer, sessionService);
-
-  const transport = new StdioServerTransport();
-  await mcpServer.connect(transport);
-  debugLog("[xiaohaha-mcp] MCP server connected");
-
-  const httpServer = createChatHttpServer({
-    port: PORT,
-    sessionService,
-  });
-
-  registerShutdownHandlers(httpServer);
-  await listenHttpServerWithFallback(httpServer, PORT);
+  await listen(httpServer, PORT, HOST);
+  debugLog(`[xiaohaha-mcp] Service ready at ${BASE_URL}`);
+  debugLog(`[xiaohaha-mcp] MCP endpoint ${MCP_ENDPOINT_URL}`);
+  console.log(`[xiaohaha-mcp] Listening on ${BASE_URL}`);
 }
 
 await start();

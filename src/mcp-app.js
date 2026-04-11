@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import { z } from "zod";
 
-import { CHAT_APP_URI, PORT, DEV_MODE } from "./config.js";
+import { BASE_URL, CHAT_APP_URI, DEV_MODE } from "./config.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -188,7 +188,7 @@ ${DEV_MODE ? `  <script>
     (function(){
       var mtime = null;
       setInterval(function(){
-        fetch("http://localhost:${PORT}/dev/bundle-mtime").then(function(r){ return r.json(); }).then(function(d){
+        fetch("${BASE_URL}dev/bundle-mtime").then(function(r){ return r.json(); }).then(function(d){
           if(mtime === null){ mtime = d.mtime; return; }
           if(d.mtime !== mtime){ location.reload(); }
         }).catch(function(){});
@@ -321,6 +321,7 @@ export function registerChatAppIntegration(mcpServer, sessionService) {
       const instanceId = extra.requestId;
 
       sessionService.bindToolInstanceToConversation(instanceId, session.conversationId);
+      sessionService.bindClientSessionToConversation(extra.sessionId, session.conversationId);
 
       if (ai_response?.trim()) {
         sessionService.recordAiResponse(session, ai_response.trim());
@@ -332,7 +333,19 @@ export function registerChatAppIntegration(mcpServer, sessionService) {
         return buildCheckMessagesPrompt(queuedMessage, session.conversationId, session.contextSummary);
       }
 
-      const message = await sessionService.waitForNextMessage(session, instanceId);
+      const message = await sessionService.waitForNextMessage(session, instanceId, extra.sessionId);
+      if (!message) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: "Cursor MCP session closed while waiting for the next message.",
+            },
+          ],
+        };
+      }
+
       return buildCheckMessagesPrompt(message, session.conversationId, session.contextSummary);
     }
   );
@@ -358,10 +371,11 @@ export function registerChatAppIntegration(mcpServer, sessionService) {
         },
       },
     },
-    async ({ instance_id, conversation_id }) => {
+    async ({ instance_id, conversation_id }, extra) => {
       const state = sessionService.getChatState({
         conversationId: conversation_id,
         instanceId: instance_id,
+        clientSessionId: extra.sessionId,
       });
 
       return {
@@ -400,16 +414,18 @@ export function registerChatAppIntegration(mcpServer, sessionService) {
         },
       },
     },
-    async ({ message, instance_id, conversation_id }) => {
+    async ({ message, instance_id, conversation_id }, extra) => {
       const session = sessionService.resolveSession({
         conversationId: conversation_id,
         instanceId: instance_id,
+        clientSessionId: extra.sessionId,
       });
 
       if (!session) {
         const state = sessionService.getChatState({
           conversationId: conversation_id,
           instanceId: instance_id,
+          clientSessionId: extra.sessionId,
         });
         return {
           isError: true,
@@ -453,6 +469,7 @@ export function registerChatAppIntegration(mcpServer, sessionService) {
       const state = sessionService.getChatState({
         conversationId: conversation_id,
         instanceId: instance_id,
+        clientSessionId: extra.sessionId,
       });
 
       return {

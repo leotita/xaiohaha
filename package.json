@@ -6,8 +6,15 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "setup:macos": "npm run build:app && npm run service:install",
     "build:app": "mkdir -p app/dist && esbuild app/mcp-chat-ui.js --bundle --format=iife --platform=browser --outfile=app/dist/mcp-chat-ui.bundle.js",
-    "dev": "mkdir -p app/dist && esbuild app/mcp-chat-ui.js --bundle --format=iife --platform=browser --outfile=app/dist/mcp-chat-ui.bundle.js --watch"
+    "dev": "mkdir -p app/dist && esbuild app/mcp-chat-ui.js --bundle --format=iife --platform=browser --outfile=app/dist/mcp-chat-ui.bundle.js --watch",
+    "service:install": "node scripts/service.js install",
+    "service:start": "node scripts/service.js start",
+    "service:stop": "node scripts/service.js stop",
+    "service:restart": "node scripts/service.js restart",
+    "service:status": "node scripts/service.js status",
+    "service:uninstall": "node scripts/service.js uninstall"
   },
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "^1.5.0",
