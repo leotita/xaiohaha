@@ -348,28 +348,6 @@ async function sendAppMessageViaServerTool(message) {
   return extractState(result);
 }
 
-async function saveContextViaLocalHttp(summary) {
-  return callLocalJson("/app/context", {
-    method: "POST",
-    body: {
-      summary,
-      conversationId: uiState.conversationId || undefined,
-    },
-  });
-}
-
-async function saveContextViaServerTool(summary) {
-  return app.callServerTool({
-    name: "xiaohaha_set_context",
-    arguments: {
-      summary,
-      conversation_id: uiState.conversationId || undefined,
-    },
-  }, {
-    timeout: LOCAL_HTTP_TIMEOUT_MS,
-  });
-}
-
 /* ═══════════════════════════════════════════════════
    Render
    ═══════════════════════════════════════════════════ */
@@ -427,11 +405,6 @@ async function refreshState() {
    Command Execution
    ═══════════════════════════════════════════════════ */
 
-const SYSTEM_COMMAND_MESSAGES = {
-  summarize: "【系统指令 /summarize】请总结当前的工作进展：\n1. 已完成的内容\n2. 当前状态\n3. 下一步待办事项\n总结完后继续等待我的指令。",
-  undo: "【系统指令 /undo】请撤销上一步操作，恢复到之前的状态。说明你撤销了什么，然后等待我的确认或后续指令。",
-};
-
 function executeCommand(cmdId) {
   const matchedCmd = SLASH_COMMANDS.find((c) => c.id === cmdId)
     || { id: cmdId, hostCommand: null };
@@ -451,13 +424,6 @@ function executeCommand(cmdId) {
     return;
   }
 
-  if (SYSTEM_COMMAND_MESSAGES[cmdId]) {
-    messageInput.value = SYSTEM_COMMAND_MESSAGES[cmdId];
-    autoResizeInput(true);
-    messageInput.focus();
-    return;
-  }
-
   switch (cmdId) {
     case "file":
       fileInput.click();
@@ -470,23 +436,6 @@ function executeCommand(cmdId) {
       uiState.error = "";
       render();
       break;
-    case "context":
-      messageInput.value = "";
-      messageInput.placeholder = "输入你的上下文摘要，按 Enter 保存...";
-      messageInput.dataset.contextMode = "1";
-      autoResizeInput(true);
-      messageInput.focus();
-      break;
-    case "clearctx":
-      saveContextViaLocalHttp("").catch(() => saveContextViaServerTool(""))
-      .then(() => {
-        uiState.error = "";
-        render();
-      }).catch((err) => {
-        uiState.error = `清除失败: ${err instanceof Error ? err.message : "未知错误"}`;
-        render();
-      });
-      break;
     case "help": {
       messageInput.value = [
         "📎  拖拽文件到输入框添加附件",
@@ -494,9 +443,6 @@ function executeCommand(cmdId) {
         "📋  从编辑器复制代码可保留文件名和行号",
         "/   输入 / 调出命令菜单",
         "⏎  Enter 发送  ⇧⏎ 换行",
-        "/compact  触发 Cursor 压缩上下文",
-        "/context  手动写上下文摘要",
-        "/clearctx 清除上下文摘要",
       ].join("\n");
       autoResizeInput(true);
       messageInput.focus();
@@ -513,35 +459,6 @@ async function sendMessage() {
   const rawText = messageInput.value.trim();
   if (!rawText && attachments.length === 0) return;
   if (uiState.sending) return;
-
-  if (messageInput.dataset.contextMode === "1") {
-    delete messageInput.dataset.contextMode;
-    messageInput.placeholder = "继续给 Agent 发消息... (/ 调出命令)";
-    if (!rawText) return;
-
-    try {
-      const payload = await saveContextViaLocalHttp(rawText).catch(() => saveContextViaServerTool(rawText));
-      if (payload?.conversationId) {
-        uiState.conversationId = payload.conversationId;
-      }
-      messageInput.value = "";
-      autoResizeInput();
-      uiState.error = "";
-      uiState.submittedMessage = `✅ 上下文摘要已保存 (${rawText.length} 字)`;
-      render();
-      setTimeout(() => {
-        if (uiState.submittedMessage.startsWith("✅")) {
-          uiState.submittedMessage = "";
-          render();
-          messageInput.focus();
-        }
-      }, 2000);
-    } catch (err) {
-      uiState.error = `保存失败: ${err instanceof Error ? err.message : "未知错误"}`;
-      render();
-    }
-    return;
-  }
 
   const fullMessage = attachments.buildFullMessage(rawText);
   const previewText = attachments.buildPreviewText(rawText);
@@ -624,15 +541,6 @@ messageInput.addEventListener("keydown", (e) => {
       if (label) { messageInput.value = label + " "; autoResizeInput(true); }
       return;
     }
-  }
-
-  if (e.key === "Escape" && messageInput.dataset.contextMode === "1") {
-    e.preventDefault();
-    delete messageInput.dataset.contextMode;
-    messageInput.placeholder = "继续给 Agent 发消息... (/ 调出命令)";
-    messageInput.value = "";
-    autoResizeInput(true);
-    return;
   }
 
   if (e.key === "Escape" && attachments.length > 0) {

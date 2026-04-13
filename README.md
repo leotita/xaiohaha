@@ -25,48 +25,33 @@
 
 ## 快速开始（macOS 推荐）
 
-### 命令在哪执行
+### 前置要求
 
-先说结论：
+- macOS
+- Node.js 22+
+- Cursor
+- 推荐安装：`ripgrep`（命令名 `rg`）
 
-- `npm run service:*` 必须在 **本仓库根目录** 执行
-- 不能直接在任意目录裸跑 `npm run service:status`
-- 如果你想在 **任意目录** 执行，请改用“带绝对路径”的方式
+说明：
 
-假设你的仓库路径是：
+- 本项目不需要额外安装“代码搜索服务”。
+- 推荐安装 `ripgrep`，MCP App 在“根据粘贴代码定位原文件”时会更快、更稳定。
+- 没安装 `ripgrep` 也能运行，程序会自动回退到 Node.js 文件扫描，只是更慢、扫描范围也更保守。
+- macOS 安装 `ripgrep`：
 
 ```bash
-/path/to/xiaohaha-mcp
+brew install ripgrep
 ```
 
-那么有两种等价方式：
+### 命令执行位置
 
-方式 1：先进入仓库根目录，再执行
+文档里的 `npm run service:*` 默认都表示在**仓库根目录**执行：
 
 ```bash
 cd /path/to/xiaohaha-mcp
 npm run service:status
 ```
 
-方式 2：在任意目录直接执行绝对路径命令
-
-```bash
-node /path/to/xiaohaha-mcp/scripts/service.js status
-```
-
-如果你想在任意目录下用 `npm`，也可以这样：
-
-```bash
-npm --prefix /path/to/xiaohaha-mcp run service:status
-```
-
-下面文档里出现的 `npm run service:*`，都默认表示：
-
-```bash
-cd /path/to/xiaohaha-mcp
-```
-
-之后再执行。
 
 ### 1. 安装依赖并构建 App UI
 

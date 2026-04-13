@@ -14494,12 +14494,6 @@ container holding the app. Specify either width or maxWidth, and either height o
   var SLASH_COMMANDS = [
     { id: "file", label: "/file", desc: "\u6DFB\u52A0\u6587\u4EF6\u9644\u4EF6", icon: "\u{1F4CE}" },
     { id: "image", label: "/image", desc: "\u7C98\u8D34\u6216\u9009\u62E9\u56FE\u7247", icon: "\u{1F5BC}\uFE0F" },
-    { id: "compact", label: "/compact", desc: "\u89E6\u53D1 Cursor \u538B\u7F29\u4E0A\u4E0B\u6587", icon: "\u{1F4E6}", hostCommand: "/compact" },
-    { id: "context", label: "/context", desc: "\u624B\u52A8\u8BBE\u7F6E\u4E0A\u4E0B\u6587\u6458\u8981", icon: "\u270F\uFE0F" },
-    { id: "clearctx", label: "/clearctx", desc: "\u6E05\u9664\u4E0A\u4E0B\u6587\u6458\u8981", icon: "\u{1F9F9}" },
-    { id: "reset", label: "/reset", desc: "\u91CD\u65B0\u5F00\u59CB\uFF0C\u5FD8\u8BB0\u5386\u53F2", icon: "\u{1F504}", hostCommand: "/new task" },
-    { id: "summarize", label: "/summarize", desc: "\u603B\u7ED3\u5F53\u524D\u8FDB\u5C55\u548C\u5F85\u529E\u4E8B\u9879", icon: "\u{1F4DD}" },
-    { id: "undo", label: "/undo", desc: "\u64A4\u9500\u4E0A\u4E00\u6B65", icon: "\u21A9\uFE0F" },
     { id: "clear", label: "/clear", desc: "\u6E05\u9664\u6240\u6709\u9644\u4EF6", icon: "\u{1F5D1}\uFE0F" },
     { id: "help", label: "/help", desc: "\u67E5\u770B\u5FEB\u6377\u64CD\u4F5C\u5E2E\u52A9", icon: "\u{1F4A1}" }
   ];
@@ -15125,26 +15119,6 @@ ${att.content}
     if (errorMessage) throw new Error(errorMessage);
     return extractState(result);
   }
-  async function saveContextViaLocalHttp(summary) {
-    return callLocalJson("/app/context", {
-      method: "POST",
-      body: {
-        summary,
-        conversationId: uiState.conversationId || void 0
-      }
-    });
-  }
-  async function saveContextViaServerTool(summary) {
-    return app.callServerTool({
-      name: "xiaohaha_set_context",
-      arguments: {
-        summary,
-        conversation_id: uiState.conversationId || void 0
-      }
-    }, {
-      timeout: LOCAL_HTTP_TIMEOUT_MS
-    });
-  }
   function render() {
     const showPreview = Boolean(uiState.submittedMessage);
     const showComposer = uiState.sending || uiState.waiting || uiState.activeTool;
@@ -15184,10 +15158,6 @@ ${att.content}
     }
     render();
   }
-  var SYSTEM_COMMAND_MESSAGES = {
-    summarize: "\u3010\u7CFB\u7EDF\u6307\u4EE4 /summarize\u3011\u8BF7\u603B\u7ED3\u5F53\u524D\u7684\u5DE5\u4F5C\u8FDB\u5C55\uFF1A\n1. \u5DF2\u5B8C\u6210\u7684\u5185\u5BB9\n2. \u5F53\u524D\u72B6\u6001\n3. \u4E0B\u4E00\u6B65\u5F85\u529E\u4E8B\u9879\n\u603B\u7ED3\u5B8C\u540E\u7EE7\u7EED\u7B49\u5F85\u6211\u7684\u6307\u4EE4\u3002",
-    undo: "\u3010\u7CFB\u7EDF\u6307\u4EE4 /undo\u3011\u8BF7\u64A4\u9500\u4E0A\u4E00\u6B65\u64CD\u4F5C\uFF0C\u6062\u590D\u5230\u4E4B\u524D\u7684\u72B6\u6001\u3002\u8BF4\u660E\u4F60\u64A4\u9500\u4E86\u4EC0\u4E48\uFF0C\u7136\u540E\u7B49\u5F85\u6211\u7684\u786E\u8BA4\u6216\u540E\u7EED\u6307\u4EE4\u3002"
-  };
   function executeCommand(cmdId) {
     const matchedCmd = SLASH_COMMANDS.find((c) => c.id === cmdId) || { id: cmdId, hostCommand: null };
     cmdPalette.hide();
@@ -15203,12 +15173,6 @@ ${att.content}
       });
       return;
     }
-    if (SYSTEM_COMMAND_MESSAGES[cmdId]) {
-      messageInput.value = SYSTEM_COMMAND_MESSAGES[cmdId];
-      autoResizeInput(true);
-      messageInput.focus();
-      return;
-    }
     switch (cmdId) {
       case "file":
         fileInput.click();
@@ -15221,32 +15185,13 @@ ${att.content}
         uiState.error = "";
         render();
         break;
-      case "context":
-        messageInput.value = "";
-        messageInput.placeholder = "\u8F93\u5165\u4F60\u7684\u4E0A\u4E0B\u6587\u6458\u8981\uFF0C\u6309 Enter \u4FDD\u5B58...";
-        messageInput.dataset.contextMode = "1";
-        autoResizeInput(true);
-        messageInput.focus();
-        break;
-      case "clearctx":
-        saveContextViaLocalHttp("").catch(() => saveContextViaServerTool("")).then(() => {
-          uiState.error = "";
-          render();
-        }).catch((err) => {
-          uiState.error = `\u6E05\u9664\u5931\u8D25: ${err instanceof Error ? err.message : "\u672A\u77E5\u9519\u8BEF"}`;
-          render();
-        });
-        break;
       case "help": {
         messageInput.value = [
           "\u{1F4CE}  \u62D6\u62FD\u6587\u4EF6\u5230\u8F93\u5165\u6846\u6DFB\u52A0\u9644\u4EF6",
           "\u{1F5BC}\uFE0F  Ctrl/Cmd+V \u7C98\u8D34\u56FE\u7247",
           "\u{1F4CB}  \u4ECE\u7F16\u8F91\u5668\u590D\u5236\u4EE3\u7801\u53EF\u4FDD\u7559\u6587\u4EF6\u540D\u548C\u884C\u53F7",
           "/   \u8F93\u5165 / \u8C03\u51FA\u547D\u4EE4\u83DC\u5355",
-          "\u23CE  Enter \u53D1\u9001  \u21E7\u23CE \u6362\u884C",
-          "/compact  \u89E6\u53D1 Cursor \u538B\u7F29\u4E0A\u4E0B\u6587",
-          "/context  \u624B\u52A8\u5199\u4E0A\u4E0B\u6587\u6458\u8981",
-          "/clearctx \u6E05\u9664\u4E0A\u4E0B\u6587\u6458\u8981"
+          "\u23CE  Enter \u53D1\u9001  \u21E7\u23CE \u6362\u884C"
         ].join("\n");
         autoResizeInput(true);
         messageInput.focus();
@@ -15258,33 +15203,6 @@ ${att.content}
     const rawText = messageInput.value.trim();
     if (!rawText && attachments.length === 0) return;
     if (uiState.sending) return;
-    if (messageInput.dataset.contextMode === "1") {
-      delete messageInput.dataset.contextMode;
-      messageInput.placeholder = "\u7EE7\u7EED\u7ED9 Agent \u53D1\u6D88\u606F... (/ \u8C03\u51FA\u547D\u4EE4)";
-      if (!rawText) return;
-      try {
-        const payload = await saveContextViaLocalHttp(rawText).catch(() => saveContextViaServerTool(rawText));
-        if (payload?.conversationId) {
-          uiState.conversationId = payload.conversationId;
-        }
-        messageInput.value = "";
-        autoResizeInput();
-        uiState.error = "";
-        uiState.submittedMessage = `\u2705 \u4E0A\u4E0B\u6587\u6458\u8981\u5DF2\u4FDD\u5B58 (${rawText.length} \u5B57)`;
-        render();
-        setTimeout(() => {
-          if (uiState.submittedMessage.startsWith("\u2705")) {
-            uiState.submittedMessage = "";
-            render();
-            messageInput.focus();
-          }
-        }, 2e3);
-      } catch (err) {
-        uiState.error = `\u4FDD\u5B58\u5931\u8D25: ${err instanceof Error ? err.message : "\u672A\u77E5\u9519\u8BEF"}`;
-        render();
-      }
-      return;
-    }
     const fullMessage = attachments.buildFullMessage(rawText);
     const previewText = attachments.buildPreviewText(rawText);
     uiState.sending = true;
@@ -15371,14 +15289,6 @@ ${att.content}
         }
         return;
       }
-    }
-    if (e.key === "Escape" && messageInput.dataset.contextMode === "1") {
-      e.preventDefault();
-      delete messageInput.dataset.contextMode;
-      messageInput.placeholder = "\u7EE7\u7EED\u7ED9 Agent \u53D1\u6D88\u606F... (/ \u8C03\u51FA\u547D\u4EE4)";
-      messageInput.value = "";
-      autoResizeInput(true);
-      return;
     }
     if (e.key === "Escape" && attachments.length > 0) {
       e.preventDefault();
