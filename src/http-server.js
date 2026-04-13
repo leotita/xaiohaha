@@ -7,6 +7,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 
 import { BUNDLE_PATH, HOST, MCP_PATH, PORT } from "./config.js";
 import { CHAT_PAGE_HTML } from "./http-chat-page.js";
+import { buildPreviewFromMessage } from "./mcp-app.js";
 import { createMcpServer } from "./mcp-server.js";
 import { debugLog } from "./process-manager.js";
 
@@ -152,9 +153,69 @@ export function createChatHttpServer({ sessionService }) {
     });
   });
 
+  app.get("/conversations", (_req, res) => {
+    const { session, error } = sessionService.resolveBrowserSession("");
+    res.json({
+      ok: true,
+      selectedConversationId: session?.conversationId || "",
+      error,
+      sessions: sessionService.listBrowserSessions(),
+    });
+  });
+
+  app.get("/conversation", (req, res) => {
+    const conversationId = typeof req.query.conversationId === "string" ? req.query.conversationId : "";
+    const resolved = conversationId ? null : sessionService.resolveBrowserSession("");
+    const snapshot = conversationId
+      ? sessionService.getBrowserSessionSnapshot(conversationId)
+      : resolved?.session
+        ? sessionService.getBrowserSessionSnapshot(resolved.session.conversationId)
+        : null;
+
+    if (!snapshot) {
+      res.status(404).json({ ok: false, error: conversationId ? "conversation not found" : "no active conversation" });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      ...snapshot,
+    });
+  });
+
   app.post("/send", (req, res) => {
     const payload = req.body && typeof req.body === "object" ? req.body : {};
     const conversationId = payload.conversationId || payload.conversation_id;
+    const instanceId = payload.instanceId || payload.instance_id;
+
+    if (instanceId) {
+      const session = sessionService.resolveSession({
+        conversationId,
+        instanceId,
+      });
+
+      if (!session) {
+        res.status(409).json({ ok: false, error: "conversation not found" });
+        return;
+      }
+
+      sessionService.bindAppInstanceToSession(session, instanceId);
+      const previewMessage = buildPreviewFromMessage(String(payload.message || ""));
+      sessionService.rememberToolPreview(session, instanceId, previewMessage);
+
+      if (sessionService.enqueueUserMessage(session, payload.message, previewMessage)) {
+        const state = sessionService.getChatState({
+          conversationId: session.conversationId,
+          instanceId,
+        });
+        res.json({ ok: true, conversationId: session.conversationId, state });
+        return;
+      }
+
+      res.status(400).json({ ok: false, error: "empty" });
+      return;
+    }
+
     const { session, error } = sessionService.resolveBrowserSession(conversationId);
 
     if (!session) {
@@ -168,6 +229,53 @@ export function createChatHttpServer({ sessionService }) {
     }
 
     res.status(400).json({ ok: false, error: "empty" });
+  });
+
+  app.get("/app/state", (req, res) => {
+    const conversationId = typeof req.query.conversationId === "string"
+      ? req.query.conversationId
+      : typeof req.query.conversation_id === "string"
+        ? req.query.conversation_id
+        : "";
+    const instanceId = typeof req.query.instanceId === "string"
+      ? req.query.instanceId
+      : typeof req.query.instance_id === "string"
+        ? req.query.instance_id
+        : "";
+
+    const state = sessionService.getChatState({
+      conversationId,
+      instanceId,
+    });
+
+    res.json({
+      ok: true,
+      state,
+    });
+  });
+
+  app.post("/app/context", (req, res) => {
+    const payload = req.body && typeof req.body === "object" ? req.body : {};
+    const conversationId = payload.conversationId || payload.conversation_id;
+    const summary = typeof payload.summary === "string" ? payload.summary.trim() : "";
+    const session = sessionService.resolveSession({
+      conversationId,
+      createIfMissing: true,
+    });
+
+    if (!session) {
+      res.status(404).json({ ok: false, error: "conversation not found" });
+      return;
+    }
+
+    session.contextSummary = summary;
+    session.pendingCompact = false;
+
+    res.json({
+      ok: true,
+      hasContext: Boolean(session.contextSummary),
+      conversationId: session.conversationId,
+    });
   });
 
   app.get("/healthz", (_req, res) => {

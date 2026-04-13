@@ -28,6 +28,24 @@ function createConversationId() {
   return `conversation_${randomUUID()}`;
 }
 
+function buildPreviewText(text, maxLength = 48) {
+  const normalized = typeof text === "string" ? text.replace(/\s+/g, " ").trim() : "";
+  if (!normalized) {
+    return "";
+  }
+
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, Math.max(0, maxLength - 1))}…`
+    : normalized;
+}
+
+export const WAIT_RESOLUTIONS = Object.freeze({
+  SESSION_CLOSED: Symbol("session_closed"),
+  REQUEST_ABORTED: Symbol("request_aborted"),
+});
+const BROWSER_SESSION_RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const BROWSER_SESSION_MAX_COUNT = 50;
+
 function createSessionState(conversationId) {
   return {
     conversationId,
@@ -397,6 +415,17 @@ export class SessionService {
     return waitingState;
   }
 
+  resolveWaitingState(session, value = WAIT_RESOLUTIONS.SESSION_CLOSED) {
+    const waitingState = this.takeWaitingState(session);
+    if (!waitingState) {
+      return false;
+    }
+
+    waitingState.resolve(value);
+    this.touchSession(session);
+    return true;
+  }
+
   getSession(conversationId) {
     const normalizedConversationId = normalizeConversationId(conversationId);
     if (!normalizedConversationId) {
@@ -553,7 +582,7 @@ export class SessionService {
 
   waitForNextMessage(session, instanceId, clientSessionId) {
     if (session.waitingResolve) {
-      this.takeWaitingState(session)?.resolve(null);
+      this.resolveWaitingState(session, WAIT_RESOLUTIONS.REQUEST_ABORTED);
     }
 
     session.waitingToolInstanceId = normalizeInstanceId(instanceId);
@@ -616,8 +645,9 @@ export class SessionService {
         continue;
       }
 
-      this.takeWaitingState(session)?.resolve(null);
-      cleared += 1;
+      if (this.resolveWaitingState(session, WAIT_RESOLUTIONS.SESSION_CLOSED)) {
+        cleared += 1;
+      }
     }
 
     return cleared;
@@ -654,14 +684,64 @@ export class SessionService {
       this.bindAppInstanceToSession(session, normalizedInstanceId);
     }
 
+    const isCurrentInstanceWaiting =
+      session.waitingResolve !== null
+      && normalizedInstanceId !== null
+      && session.waitingToolInstanceId === normalizedInstanceId;
+
     return {
       conversationId: session.conversationId,
       anyWaiting: session.waitingResolve !== null,
-      waiting: session.waitingResolve !== null,
+      waiting: isCurrentInstanceWaiting,
       queueLength: session.messageQueue.length,
       events: session.chatEvents,
       previewMessage: normalizedInstanceId ? session.toolPreviewByInstanceId.get(normalizedInstanceId) || "" : "",
     };
+  }
+
+  getBrowserSessionSnapshot(conversationId) {
+    const session = this.getSession(conversationId);
+    if (!session) {
+      return null;
+    }
+
+    return {
+      conversationId: session.conversationId,
+      waiting: session.waitingResolve !== null,
+      queueLength: session.messageQueue.length,
+      updatedAt: session.updatedAt,
+      events: session.chatEvents,
+    };
+  }
+
+  listBrowserSessions() {
+    const now = Date.now();
+
+    return [...this.sessions.values()]
+      .filter((session) =>
+        session.waitingResolve !== null
+        || session.messageQueue.length > 0
+        || (now - session.updatedAt) <= BROWSER_SESSION_RECENT_WINDOW_MS
+      )
+      .sort((left, right) => {
+        const waitingDelta = Number(right.waitingResolve !== null) - Number(left.waitingResolve !== null);
+        if (waitingDelta !== 0) {
+          return waitingDelta;
+        }
+        return right.updatedAt - left.updatedAt;
+      })
+      .slice(0, BROWSER_SESSION_MAX_COUNT)
+      .map((session) => {
+        const lastEvent = session.chatEvents[session.chatEvents.length - 1] || null;
+        return {
+          conversationId: session.conversationId,
+          waiting: session.waitingResolve !== null,
+          queueLength: session.messageQueue.length,
+          updatedAt: session.updatedAt,
+          lastRole: lastEvent?.role || "",
+          preview: buildPreviewText(lastEvent?.text || ""),
+        };
+      });
   }
 
   resolveBrowserSession(conversationId) {

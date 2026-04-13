@@ -25,7 +25,7 @@
 
 ## 快速开始（macOS 推荐）
 
-## 命令在哪执行
+### 命令在哪执行
 
 先说结论：
 
@@ -36,7 +36,7 @@
 假设你的仓库路径是：
 
 ```bash
-/Users/leotita/Documents/xaiohaha
+/path/to/xiaohaha-mcp
 ```
 
 那么有两种等价方式：
@@ -44,26 +44,26 @@
 方式 1：先进入仓库根目录，再执行
 
 ```bash
-cd /Users/leotita/Documents/xaiohaha
+cd /path/to/xiaohaha-mcp
 npm run service:status
 ```
 
 方式 2：在任意目录直接执行绝对路径命令
 
 ```bash
-node /Users/leotita/Documents/xaiohaha/scripts/service.js status
+node /path/to/xiaohaha-mcp/scripts/service.js status
 ```
 
 如果你想在任意目录下用 `npm`，也可以这样：
 
 ```bash
-npm --prefix /Users/leotita/Documents/xaiohaha run service:status
+npm --prefix /path/to/xiaohaha-mcp run service:status
 ```
 
 下面文档里出现的 `npm run service:*`，都默认表示：
 
 ```bash
-cd /Users/leotita/Documents/xaiohaha
+cd /path/to/xiaohaha-mcp
 ```
 
 之后再执行。
@@ -71,7 +71,7 @@ cd /Users/leotita/Documents/xaiohaha
 ### 1. 安装依赖并构建 App UI
 
 ```bash
-cd xiaohaha-mcp
+cd /path/to/xiaohaha-mcp
 npm install
 npm run build:app
 ```
@@ -147,7 +147,7 @@ npm run service:status
 后台服务统一通过 `launchd` 管理：
 
 ```bash
-cd /Users/leotita/Documents/xaiohaha
+cd /path/to/xiaohaha-mcp
 npm run service:status
 npm run service:start
 npm run service:stop
@@ -167,11 +167,11 @@ npm run service:uninstall
 如果你不想先 `cd` 到仓库目录，也可以在任意目录执行：
 
 ```bash
-node /Users/leotita/Documents/xaiohaha/scripts/service.js status
-node /Users/leotita/Documents/xaiohaha/scripts/service.js start
-node /Users/leotita/Documents/xaiohaha/scripts/service.js stop
-node /Users/leotita/Documents/xaiohaha/scripts/service.js restart
-node /Users/leotita/Documents/xaiohaha/scripts/service.js uninstall
+node /path/to/xiaohaha-mcp/scripts/service.js status
+node /path/to/xiaohaha-mcp/scripts/service.js start
+node /path/to/xiaohaha-mcp/scripts/service.js stop
+node /path/to/xiaohaha-mcp/scripts/service.js restart
+node /path/to/xiaohaha-mcp/scripts/service.js uninstall
 ```
 
 ## 日常使用
@@ -181,7 +181,8 @@ node /Users/leotita/Documents/xaiohaha/scripts/service.js uninstall
 3. 后续消息可以从两个入口继续发：
    - 浏览器页：`http://127.0.0.1:13456/`
    - Cursor 内嵌 Xiaohaha App
-4. AI 处理完后继续等待下一条指令，如此循环
+4. 如果同时存在多个会话，浏览器页顶部可以切换目标会话，再继续发送消息
+5. AI 处理完后继续等待下一条指令，如此循环
 
 ## 开发与维护
 
@@ -215,7 +216,10 @@ npm run service:restart
 npm start
 ```
 
-这仍然是同一套 `Streamable HTTP` 服务，只是不用 `launchd` 托管。
+注意：
+
+- 如果 `launchd` 后台服务还在运行，直接 `npm start` 会因为同样占用 `127.0.0.1:13456` 而启动失败；调试前先执行 `npm run service:stop`，或改用不同端口
+- `npm start` 默认把状态文件写在仓库目录下；如果你想复用 `launchd` 服务的数据目录，请先设置 `XIAOHAHA_HOME=~/.xiaohaha-mcp/data`
 
 ## 连接信息
 

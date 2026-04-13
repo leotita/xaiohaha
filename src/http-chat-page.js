@@ -53,6 +53,40 @@ export const CHAT_PAGE_HTML = `<!DOCTYPE html>
     .header-info { flex: 1; }
     .header-info h1 { font-size: 16px; font-weight: 700; letter-spacing: -0.3px; }
     .header-info p { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+    .header-actions {
+      display: flex; align-items: center; gap: 10px;
+      flex-shrink: 0;
+    }
+    .session-picker {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 10px;
+      border-radius: 12px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      font-size: 12px;
+    }
+    .session-picker select {
+      min-width: 260px;
+      max-width: 360px;
+      background: transparent;
+      color: var(--text-primary);
+      border: none;
+      outline: none;
+      font-size: 12px;
+      font-family: var(--font);
+    }
+    .refresh-btn {
+      border: 1px solid var(--border);
+      background: var(--bg-tertiary);
+      color: var(--text-secondary);
+      border-radius: 10px;
+      padding: 8px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .refresh-btn:hover { color: var(--text-primary); border-color: rgba(255,255,255,0.14); }
 
     .status-pill {
       display: flex; align-items: center; gap: 6px;
@@ -165,7 +199,30 @@ export const CHAT_PAGE_HTML = `<!DOCTYPE html>
     }
     #sendBtn:hover { background: var(--accent-hover); transform: scale(1.05); }
     #sendBtn:active { transform: scale(0.95); }
+    #sendBtn:disabled {
+      background: var(--bg-tertiary);
+      color: var(--text-muted);
+      cursor: not-allowed;
+      transform: none;
+    }
     #sendBtn svg { width: 18px; height: 18px; }
+
+    @media (max-width: 900px) {
+      .header {
+        align-items: stretch;
+        flex-wrap: wrap;
+      }
+      .header-actions {
+        width: 100%;
+      }
+      .session-picker {
+        flex: 1;
+      }
+      .session-picker select {
+        min-width: 0;
+        width: 100%;
+      }
+    }
   </style>
 </head>
 <body>
@@ -173,11 +230,20 @@ export const CHAT_PAGE_HTML = `<!DOCTYPE html>
     <div class="logo">X</div>
     <div class="header-info">
       <h1>Xiaohaha Chat</h1>
-      <p>Cursor AI 额度放大器</p>
+      <p id="headerHint">Cursor AI 额度放大器</p>
     </div>
-    <div class="status-pill" id="statusPill">
-      <span class="status-dot"></span>
-      <span id="statusText">未连接</span>
+    <div class="header-actions">
+      <label class="session-picker">
+        <span>会话</span>
+        <select id="conversationSelect">
+          <option value="">加载中...</option>
+        </select>
+      </label>
+      <button class="refresh-btn" id="reloadSessionsBtn" type="button">刷新</button>
+      <div class="status-pill" id="statusPill">
+        <span class="status-dot"></span>
+        <span id="statusText">未连接</span>
+      </div>
     </div>
   </div>
 
@@ -202,13 +268,17 @@ export const CHAT_PAGE_HTML = `<!DOCTYPE html>
     const INPUT_MIN_HEIGHT = 24;
     const INPUT_MAX_HEIGHT = 120;
     const input = document.getElementById('input');
+    const sendBtn = document.getElementById('sendBtn');
     const messagesEl = document.getElementById('messages');
-    const emptyState = document.getElementById('emptyState');
     const statusPill = document.getElementById('statusPill');
     const statusText = document.getElementById('statusText');
-    const conversationId = new URLSearchParams(window.location.search).get('conversationId');
+    const headerHint = document.getElementById('headerHint');
+    const conversationSelect = document.getElementById('conversationSelect');
+    const reloadSessionsBtn = document.getElementById('reloadSessionsBtn');
+    let conversationId = new URLSearchParams(window.location.search).get('conversationId') || '';
     let lastSeenId = 0;
     let isComposing = false;
+    let sessions = [];
 
     function autoResizeInput(force = false) {
       if (isComposing && !force) return;
@@ -236,7 +306,168 @@ export const CHAT_PAGE_HTML = `<!DOCTYPE html>
 
     autoResizeInput(true);
 
+    function escapeHtml(text) {
+      return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+
+    function setStatus(text, mode) {
+      statusText.textContent = text;
+      statusPill.className = 'status-pill';
+      if (mode === 'waiting') {
+        statusPill.classList.add('waiting');
+      } else if (mode === 'connected') {
+        statusPill.classList.add('connected');
+      }
+    }
+
+    function setHeaderHint(text) {
+      headerHint.textContent = text;
+    }
+
+    function updateComposerAvailability() {
+      const enabled = Boolean(conversationId);
+      input.disabled = !enabled;
+      sendBtn.disabled = !enabled;
+      input.placeholder = enabled ? '输入消息...' : '先选择一个会话...';
+    }
+
+    function renderEmptyState(title, messageHtml) {
+      messagesEl.innerHTML =
+        '<div class="empty-state" id="emptyState">' +
+        '<div class="empty-icon">&#x1f680;</div>' +
+        '<h3>' + escapeHtml(title) + '</h3>' +
+        '<p>' + messageHtml + '</p>' +
+        '</div>';
+    }
+
+    function syncConversationQuery() {
+      const url = new URL(window.location.href);
+      if (conversationId) {
+        url.searchParams.set('conversationId', conversationId);
+      } else {
+        url.searchParams.delete('conversationId');
+      }
+      window.history.replaceState({}, '', url.toString());
+    }
+
+    function updateSelectOptions() {
+      if (sessions.length === 0) {
+        conversationSelect.innerHTML = '<option value="">暂无会话</option>';
+        conversationSelect.disabled = true;
+        return;
+      }
+
+      conversationSelect.disabled = false;
+      conversationSelect.innerHTML = sessions.map((session) => {
+        const status = session.waiting ? '等待' : '处理中';
+        const preview = escapeHtml(session.preview || session.conversationId);
+        const selected = session.conversationId === conversationId ? ' selected' : '';
+        return '<option value="' + escapeHtml(session.conversationId) + '"' + selected + '>' +
+          escapeHtml(status + ' · ') + preview +
+          '</option>';
+      }).join('');
+    }
+
+    function addMsg(text, role, time, shouldScroll = true) {
+      const empty = document.getElementById('emptyState');
+      if (empty) empty.remove();
+      const row = document.createElement('div');
+      row.className = 'msg-row ' + role;
+      const av = role === 'user' ? '&#x1f464;' : '&#x2728;';
+      row.innerHTML =
+        '<div class="avatar">' + av + '</div>' +
+        '<div class="bubble">' + escapeHtml(text) +
+        '<div class="time">' + escapeHtml(time || new Date().toLocaleTimeString()) + '</div></div>';
+      messagesEl.appendChild(row);
+      if (shouldScroll) {
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+    }
+
+    function renderConversation(events) {
+      messagesEl.innerHTML = '';
+      if (!events || events.length === 0) {
+        renderEmptyState('暂无消息', '当前会话还没有聊天记录。');
+        return;
+      }
+
+      for (const event of events) {
+        addMsg(event.text || '', event.role === 'user' ? 'user' : 'ai', event.time || '', false);
+      }
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function updateLastSeenId(events) {
+      lastSeenId = (events || []).reduce((maxId, event) => {
+        if (event && event.role === 'ai' && typeof event.id === 'number') {
+          return Math.max(maxId, event.id);
+        }
+        return maxId;
+      }, 0);
+    }
+
+    async function loadConversationList({ loadConversationIfNeeded = true } = {}) {
+      const response = await fetch('/conversations');
+      const data = await response.json();
+      sessions = Array.isArray(data.sessions) ? data.sessions : [];
+
+      const selectedStillExists = conversationId && sessions.some((session) => session.conversationId === conversationId);
+      if (!selectedStillExists) {
+        conversationId = data.selectedConversationId || sessions[0]?.conversationId || '';
+      }
+
+      updateSelectOptions();
+      updateComposerAvailability();
+
+      if (!conversationId) {
+        setHeaderHint('未检测到可控制的会话');
+        setStatus(data.error || '未连接', '');
+        renderEmptyState('暂无会话', '当 Agent 进入 <span class="kbd">check_messages</span> 后，会话会出现在这里。');
+        syncConversationQuery();
+        return;
+      }
+
+      setHeaderHint('当前会话: ' + conversationId);
+      syncConversationQuery();
+
+      if (loadConversationIfNeeded) {
+        await loadConversation(conversationId);
+      }
+    }
+
+    async function loadConversation(nextConversationId) {
+      if (!nextConversationId) {
+        return;
+      }
+
+      const response = await fetch('/conversation?conversationId=' + encodeURIComponent(nextConversationId));
+      const data = await response.json();
+      if (!response.ok || data.ok === false) {
+        setStatus(data.error || '加载失败', '');
+        return;
+      }
+
+      conversationId = data.conversationId || nextConversationId;
+      setHeaderHint('当前会话: ' + conversationId);
+      renderConversation(data.events || []);
+      updateLastSeenId(data.events || []);
+      updateComposerAvailability();
+
+      if (data.waiting) {
+        setStatus('等待输入...', 'waiting');
+      } else {
+        setStatus('AI 处理中', 'connected');
+      }
+
+      updateSelectOptions();
+      syncConversationQuery();
+    }
+
     async function send() {
+      if (!conversationId) return;
       const msg = input.value.trim();
       if (!msg) return;
       addMsg(msg, 'user');
@@ -250,25 +481,17 @@ export const CHAT_PAGE_HTML = `<!DOCTYPE html>
         const d = await r.json();
         if (!r.ok || d.ok === false) {
           addMsg('[' + (d.error || '发送失败') + ']', 'ai');
+        } else {
+          setStatus('AI 处理中', 'connected');
         }
       } catch { addMsg('[发送失败，请检查 MCP 服务是否运行]', 'ai'); }
     }
 
-    function addMsg(text, role) {
-      if (emptyState) emptyState.remove();
-      const row = document.createElement('div');
-      row.className = 'msg-row ' + role;
-      const av = role === 'user' ? '&#x1f464;' : '&#x2728;';
-      const escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      row.innerHTML =
-        '<div class="avatar">' + av + '</div>' +
-        '<div class="bubble">' + escaped +
-        '<div class="time">' + new Date().toLocaleTimeString() + '</div></div>';
-      messagesEl.appendChild(row);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
-    }
-
     async function poll() {
+      if (!conversationId) {
+        return;
+      }
+
       try {
         // 只拉取 lastSeenId 之后的新消息，避免轮询时把历史 AI 回复重复渲染一遍。
         const params = new URLSearchParams({ after: String(lastSeenId) });
@@ -289,7 +512,7 @@ export const CHAT_PAGE_HTML = `<!DOCTYPE html>
         }
         if (d.responses && d.responses.length > 0) {
           for (const resp of d.responses) {
-            addMsg(resp.text, 'ai');
+            addMsg(resp.text, 'ai', resp.time || '');
             lastSeenId = resp.id;
           }
         }
@@ -299,9 +522,31 @@ export const CHAT_PAGE_HTML = `<!DOCTYPE html>
       }
     }
 
+    conversationSelect.addEventListener('change', async (event) => {
+      conversationId = event.target.value || '';
+      updateComposerAvailability();
+      if (conversationId) {
+        await loadConversation(conversationId);
+      } else {
+        renderEmptyState('暂无会话', '请先选择一个会话。');
+      }
+    });
+
+    reloadSessionsBtn.addEventListener('click', async () => {
+      await loadConversationList();
+    });
+
     setInterval(poll, 1500);
-    poll();
-    input.focus();
+    setInterval(() => {
+      void loadConversationList({ loadConversationIfNeeded: false });
+    }, 5000);
+    loadConversationList().catch(() => {
+      setStatus('未连接', '');
+      renderEmptyState('连接失败', '请检查 Xiaohaha 服务是否正常运行。');
+    }).finally(() => {
+      updateComposerAvailability();
+      if (conversationId) input.focus();
+    });
   </script>
 </body>
 </html>`;

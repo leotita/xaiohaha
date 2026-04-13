@@ -14856,6 +14856,8 @@ ${att.content}
   styleEl.textContent = STYLES;
   document.head.appendChild(styleEl);
   var BROWSER_CHAT_BASE_URL = typeof window.__XIAOHAHA_BROWSER_CHAT_URL === "string" ? window.__XIAOHAHA_BROWSER_CHAT_URL : "";
+  var LOCAL_HTTP_TIMEOUT_MS = 4e3;
+  var LOCAL_SEND_TIMEOUT_MS = 8e3;
   var root = document.getElementById("app");
   if (!root) throw new Error("Missing #app mount element.");
   var needsFullDom = !root.querySelector("#inputShell") || !root.querySelector("#cmdPalette") || root.querySelector("#cmdPalette")?.closest("#inputShell");
@@ -14943,11 +14945,59 @@ ${att.content}
     )}px`;
   }
   function updateFakeCaret() {
-    const showComposer = !uiState.submittedMessage;
+    const showComposer = uiState.sending || uiState.waiting || uiState.activeTool;
     const hasRealFocus = document.activeElement === messageInput;
     const showFakeCaret = showComposer && uiState.connected && !uiState.sending && !hasRealFocus && !messageInput.value && attachmentBar.hidden;
     fakeCaret.hidden = !showFakeCaret;
     inputShell.classList.toggle("xh-pseudo-focus", showFakeCaret);
+  }
+  function buildLocalUrl(pathname, params) {
+    if (!BROWSER_CHAT_BASE_URL) {
+      return null;
+    }
+    const url2 = new URL(pathname, BROWSER_CHAT_BASE_URL);
+    if (params && typeof params === "object") {
+      for (const [key, value] of Object.entries(params)) {
+        if (value !== void 0 && value !== null && value !== "") {
+          url2.searchParams.set(key, String(value));
+        }
+      }
+    }
+    return url2;
+  }
+  async function callLocalJson(pathname, { method = "GET", params, body, timeoutMs = LOCAL_HTTP_TIMEOUT_MS } = {}) {
+    const url2 = buildLocalUrl(pathname, params);
+    if (!url2) {
+      throw new Error("\u6D4F\u89C8\u5668\u804A\u5929\u5730\u5740\u4E0D\u53EF\u7528");
+    }
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url2.toString(), {
+        method,
+        headers: body ? { "Content-Type": "application/json" } : void 0,
+        body: body ? JSON.stringify(body) : void 0,
+        signal: controller.signal
+      });
+      let payload = {};
+      try {
+        payload = await response.json();
+      } catch {
+        payload = {};
+      }
+      if (!response.ok || payload?.ok === false) {
+        const errorMessage = typeof payload?.error === "string" && payload.error.trim() ? payload.error.trim() : `HTTP ${response.status}`;
+        throw new Error(errorMessage);
+      }
+      return payload;
+    } catch (error40) {
+      if (error40?.name === "AbortError") {
+        throw new Error("\u672C\u5730\u670D\u52A1\u8BF7\u6C42\u8D85\u65F6");
+      }
+      throw error40;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
   }
   async function openBrowserChat() {
     if (!BROWSER_CHAT_BASE_URL) {
@@ -15027,30 +15077,96 @@ ${att.content}
       previewMessage: previewMatch?.[1]?.trim() || ""
     };
   }
-  function render() {
-    const showPreview = Boolean(uiState.submittedMessage);
-    const showComposer = !showPreview;
-    composerForm.hidden = !showComposer;
-    sentPreview.hidden = !showPreview;
-    errorBanner.hidden = !uiState.error;
-    errorBanner.textContent = uiState.error;
-    if (showPreview) {
-      sentPreview.innerHTML = escapeHtml(uiState.submittedMessage);
-    } else {
-      sentPreview.innerHTML = "";
-      messageInput.disabled = uiState.sending;
-    }
-    updateFakeCaret();
+  async function refreshStateFromLocalHttp() {
+    const payload = await callLocalJson("/app/state", {
+      params: {
+        instanceId: uiState.instanceId || void 0,
+        conversationId: uiState.conversationId || void 0
+      }
+    });
+    return normalizeState(payload?.state);
   }
-  async function refreshState() {
+  async function refreshStateFromServerTool() {
     const result = await app.callServerTool({
       name: "xiaohaha_get_chat_state",
       arguments: {
         instance_id: uiState.instanceId || void 0,
         conversation_id: uiState.conversationId || void 0
       }
+    }, {
+      timeout: LOCAL_HTTP_TIMEOUT_MS
     });
-    const nextState = extractState(result);
+    return extractState(result);
+  }
+  async function sendAppMessageViaLocalHttp(message) {
+    const payload = await callLocalJson("/send", {
+      method: "POST",
+      timeoutMs: LOCAL_SEND_TIMEOUT_MS,
+      body: {
+        message,
+        instanceId: uiState.instanceId || void 0,
+        conversationId: uiState.conversationId || void 0
+      }
+    });
+    return normalizeState(payload?.state);
+  }
+  async function sendAppMessageViaServerTool(message) {
+    const result = await app.callServerTool({
+      name: "xiaohaha_send_app_message",
+      arguments: {
+        message,
+        instance_id: uiState.instanceId || void 0,
+        conversation_id: uiState.conversationId || void 0
+      }
+    }, {
+      timeout: LOCAL_SEND_TIMEOUT_MS
+    });
+    const errorMessage = extractErrorMessage(result);
+    if (errorMessage) throw new Error(errorMessage);
+    return extractState(result);
+  }
+  async function saveContextViaLocalHttp(summary) {
+    return callLocalJson("/app/context", {
+      method: "POST",
+      body: {
+        summary,
+        conversationId: uiState.conversationId || void 0
+      }
+    });
+  }
+  async function saveContextViaServerTool(summary) {
+    return app.callServerTool({
+      name: "xiaohaha_set_context",
+      arguments: {
+        summary,
+        conversation_id: uiState.conversationId || void 0
+      }
+    }, {
+      timeout: LOCAL_HTTP_TIMEOUT_MS
+    });
+  }
+  function render() {
+    const showPreview = Boolean(uiState.submittedMessage);
+    const showComposer = uiState.sending || uiState.waiting || uiState.activeTool;
+    composerForm.hidden = !showComposer;
+    sentPreview.hidden = !showPreview;
+    errorBanner.hidden = !uiState.error;
+    errorBanner.textContent = uiState.error;
+    messageInput.disabled = uiState.sending;
+    if (showPreview) {
+      sentPreview.innerHTML = escapeHtml(uiState.submittedMessage);
+    } else {
+      sentPreview.innerHTML = "";
+    }
+    updateFakeCaret();
+  }
+  async function refreshState() {
+    let nextState = null;
+    try {
+      nextState = await refreshStateFromLocalHttp();
+    } catch {
+      nextState = await refreshStateFromServerTool();
+    }
     if (!nextState) throw new Error("Failed to parse chat state from MCP response.");
     const previewMessage = nextState.previewMessage.trim();
     uiState.connected = true;
@@ -15113,13 +15229,7 @@ ${att.content}
         messageInput.focus();
         break;
       case "clearctx":
-        app.callServerTool({
-          name: "xiaohaha_set_context",
-          arguments: {
-            summary: "",
-            conversation_id: uiState.conversationId || void 0
-          }
-        }).then(() => {
+        saveContextViaLocalHttp("").catch(() => saveContextViaServerTool("")).then(() => {
           uiState.error = "";
           render();
         }).catch((err) => {
@@ -15153,13 +15263,10 @@ ${att.content}
       messageInput.placeholder = "\u7EE7\u7EED\u7ED9 Agent \u53D1\u6D88\u606F... (/ \u8C03\u51FA\u547D\u4EE4)";
       if (!rawText) return;
       try {
-        await app.callServerTool({
-          name: "xiaohaha_set_context",
-          arguments: {
-            summary: rawText,
-            conversation_id: uiState.conversationId || void 0
-          }
-        });
+        const payload = await saveContextViaLocalHttp(rawText).catch(() => saveContextViaServerTool(rawText));
+        if (payload?.conversationId) {
+          uiState.conversationId = payload.conversationId;
+        }
         messageInput.value = "";
         autoResizeInput();
         uiState.error = "";
@@ -15191,17 +15298,7 @@ ${att.content}
     uiState.latestAiMessage = "";
     render();
     try {
-      const result = await app.callServerTool({
-        name: "xiaohaha_send_app_message",
-        arguments: {
-          message: fullMessage,
-          instance_id: uiState.instanceId || void 0,
-          conversation_id: uiState.conversationId || void 0
-        }
-      });
-      const errorMessage = extractErrorMessage(result);
-      if (errorMessage) throw new Error(errorMessage);
-      const nextState = extractState(result);
+      const nextState = await sendAppMessageViaLocalHttp(fullMessage).catch(() => sendAppMessageViaServerTool(fullMessage));
       if (nextState) {
         uiState.conversationId = nextState.conversationId || uiState.conversationId;
         uiState.anyWaiting = nextState.anyWaiting;

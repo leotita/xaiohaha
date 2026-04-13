@@ -6,9 +6,11 @@ import { promisify } from "node:util";
 import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import { z } from "zod";
 
-import { BASE_URL, CHAT_APP_URI, DEV_MODE } from "./config.js";
+import { BASE_ORIGIN, BASE_URL, CHAT_APP_URI, DEV_MODE } from "./config.js";
+import { WAIT_RESOLUTIONS } from "./session-service.js";
 
 const execFileAsync = promisify(execFile);
+const CHECK_MESSAGES_PROGRESS_MS = 15_000;
 
 const SKIP_DIRS = new Set([
   "node_modules", ".git", "dist", ".next", "build", "coverage",
@@ -207,7 +209,7 @@ ${DEV_MODE ? `  <script>
 const IMAGE_MARKER_RE = /\[XIAOHAHA_IMG:(data:([^;]+);base64,([^\]]+))\]/g;
 const FILE_BLOCK_RE = /📎 [^\n]+:\n```[^\n]*\n[\s\S]*?```/g;
 
-function buildPreviewFromMessage(message) {
+export function buildPreviewFromMessage(message) {
   const re = new RegExp(IMAGE_MARKER_RE.source, IMAGE_MARKER_RE.flags);
   const imageMatches = [...message.matchAll(re)];
   const imageCount = imageMatches.length;
@@ -265,6 +267,29 @@ function buildCheckMessagesPrompt(message, conversationId, contextSummary) {
   return { content };
 }
 
+function startCheckMessagesProgress(extra) {
+  const progressToken = extra?._meta?.progressToken;
+  if (progressToken === undefined || progressToken === null) {
+    return () => {};
+  }
+
+  const timer = setInterval(() => {
+    void extra.sendNotification({
+      method: "notifications/progress",
+      params: {
+        progressToken,
+        progress: 0,
+        total: 1,
+        message: "Waiting for the next Xiaohaha message...",
+      },
+    }).catch(() => {});
+  }, CHECK_MESSAGES_PROGRESS_MS);
+
+  return () => {
+    clearInterval(timer);
+  };
+}
+
 export function registerChatAppIntegration(mcpServer, sessionService) {
   registerAppResource(
     mcpServer,
@@ -275,6 +300,9 @@ export function registerChatAppIntegration(mcpServer, sessionService) {
       _meta: {
         ui: {
           prefersBorder: false,
+          csp: {
+            connectDomains: [BASE_ORIGIN],
+          },
         },
       },
     },
@@ -290,6 +318,9 @@ export function registerChatAppIntegration(mcpServer, sessionService) {
             _meta: {
               ui: {
                 prefersBorder: false,
+                csp: {
+                  connectDomains: [BASE_ORIGIN],
+                },
               },
             },
           },
@@ -338,20 +369,58 @@ export function registerChatAppIntegration(mcpServer, sessionService) {
         return buildCheckMessagesPrompt(queuedMessage, session.conversationId, session.contextSummary);
       }
 
-      const message = await sessionService.waitForNextMessage(session, instanceId, extra.sessionId);
-      if (!message) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: "Cursor MCP session closed while waiting for the next message.",
-            },
-          ],
-        };
-      }
+      let abortListener = null;
+      const stopProgress = startCheckMessagesProgress(extra);
 
-      return buildCheckMessagesPrompt(message, session.conversationId, session.contextSummary);
+      try {
+        const message = await Promise.race([
+          sessionService.waitForNextMessage(session, instanceId, extra.sessionId),
+          new Promise((resolve) => {
+            abortListener = () => {
+              sessionService.resolveWaitingState(session, WAIT_RESOLUTIONS.REQUEST_ABORTED);
+              resolve(WAIT_RESOLUTIONS.REQUEST_ABORTED);
+            };
+
+            if (extra.signal.aborted) {
+              abortListener();
+              return;
+            }
+
+            extra.signal.addEventListener("abort", abortListener, { once: true });
+          }),
+        ]);
+
+        if (message === WAIT_RESOLUTIONS.REQUEST_ABORTED) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: "Cursor cancelled check_messages while waiting for the next message.",
+              },
+            ],
+          };
+        }
+
+        if (message === WAIT_RESOLUTIONS.SESSION_CLOSED || !message) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: "Cursor MCP session closed while waiting for the next message.",
+              },
+            ],
+          };
+        }
+
+        return buildCheckMessagesPrompt(message, session.conversationId, session.contextSummary);
+      } finally {
+        stopProgress();
+        if (abortListener) {
+          extra.signal.removeEventListener("abort", abortListener);
+        }
+      }
     }
   );
 

@@ -19,7 +19,7 @@ export const MCP_PATH = process.env.XIAOHAHA_MCP_PATH || "/mcp";
 export const DEBUG_LOG = process.env.XIAOHAHA_DEBUG === "1";
 export const DEV_MODE = process.env.XIAOHAHA_DEV === "1";
 
-export const CHAT_APP_URI = "ui://xiaohaha/chat-ui-v5.html";
+export const CHAT_APP_URI = "ui://xiaohaha/chat-ui-v6.html";
 export const SERVICE_LABEL = "com.xiaohaha.mcp";
 
 export function buildLocalUrl(pathname = "/") {
@@ -28,4 +28,5 @@ export function buildLocalUrl(pathname = "/") {
 }
 
 export const BASE_URL = buildLocalUrl("/");
+export const BASE_ORIGIN = new URL(BASE_URL).origin;
 export const MCP_ENDPOINT_URL = buildLocalUrl(MCP_PATH);
