@@ -114,12 +114,13 @@ const imageLightboxClose = document.getElementById("imageLightboxClose");
    MCP App + State
    ═══════════════════════════════════════════════════ */
 
-const app = new App({ name: "xiaohaha-chat-ui", version: "1.0.7" }, {}, { autoResize: true });
+const app = new App({ name: "xiaohaha-chat-ui", version: "1.0.7" }, {}, { autoResize: false });
 
 const uiState = {
   connected: false,
   instanceId: "",
   conversationId: "",
+  routeHint: "",
   anyWaiting: false,
   waiting: false,
   activeTool: false,
@@ -136,6 +137,8 @@ let isComposing = false;
 let dragCounter = 0;
 let isImageLightboxZoomed = false;
 let activeImageLightboxAttachment = null;
+let sizeSyncScheduled = false;
+let lastSyncedSize = { width: 0, height: 0 };
 
 /* ── Managers ── */
 
@@ -173,8 +176,65 @@ function autoResizeInput(force = false) {
   )}px`;
 }
 
+function measureAppSize() {
+  const hostRoot = root.firstElementChild || root;
+  const width = Math.ceil(root.getBoundingClientRect().width || window.innerWidth);
+  const heightCandidates = [
+    root.scrollHeight,
+    root.offsetHeight,
+    root.getBoundingClientRect().height,
+    hostRoot?.scrollHeight,
+    hostRoot?.offsetHeight,
+    hostRoot?.getBoundingClientRect?.().height,
+    document.body?.scrollHeight,
+    document.body?.offsetHeight,
+    document.body?.getBoundingClientRect?.().height,
+  ].filter((value) => Number.isFinite(value) && value > 0);
+
+  const height = Math.ceil(Math.max(...heightCandidates, 1));
+
+  return {
+    width,
+    height,
+  };
+}
+
+function flushSizeSync() {
+  if (!uiState.connected || document.visibilityState === "hidden") {
+    return;
+  }
+
+  const nextSize = measureAppSize();
+  if (nextSize.width === lastSyncedSize.width && nextSize.height === lastSyncedSize.height) {
+    return;
+  }
+
+  lastSyncedSize = nextSize;
+  void app.sendSizeChanged(nextSize).catch(() => {});
+}
+
+function scheduleSizeSync() {
+  if (sizeSyncScheduled) {
+    return;
+  }
+
+  sizeSyncScheduled = true;
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      sizeSyncScheduled = false;
+      flushSizeSync();
+    });
+  });
+}
+
+function shouldShowComposer() {
+  // 当前卡片在 tool 尚未完成时需要保留输入框；
+  // 历史卡片一旦收到对应 toolresult，就不再展示输入框。
+  return uiState.sending || uiState.waiting || (uiState.activeTool && !uiState.completedTool);
+}
+
 function updateFakeCaret() {
-  const showComposer = uiState.sending || uiState.waiting || uiState.activeTool;
+  const showComposer = shouldShowComposer();
   const hasRealFocus = document.activeElement === messageInput;
   const showFakeCaret = showComposer
     && uiState.connected
@@ -684,9 +744,11 @@ function syncHostContext(hostContext) {
   if (hostContext?.theme) applyDocumentTheme(hostContext.theme);
   if (hostContext?.styles?.variables) applyHostStyleVariables(hostContext.styles.variables);
   if (hostContext?.styles?.css?.fonts) applyHostFonts(hostContext.styles.css.fonts);
+  const previousInstanceId = uiState.instanceId;
   if (hostContext?.toolInfo?.id !== undefined && hostContext?.toolInfo?.id !== null) {
     uiState.instanceId = String(hostContext.toolInfo.id);
   }
+  return previousInstanceId !== uiState.instanceId;
 }
 
 /* ── State extraction (from MCP results) ── */
@@ -735,6 +797,11 @@ function extractConversationIdFromArgs(args) {
   return typeof args.conversation_id === "string" ? args.conversation_id : "";
 }
 
+function extractRouteHintFromArgs(args) {
+  if (!args || typeof args !== "object") return "";
+  return typeof args.ai_response === "string" ? args.ai_response.trim() : "";
+}
+
 function extractPromptStateFromToolResult(result) {
   const textBlocks = Array.isArray(result?.content)
     ? result.content.filter((item) => item?.type === "text" && typeof item.text === "string")
@@ -747,11 +814,16 @@ function extractPromptStateFromToolResult(result) {
   };
 }
 
+function isRoutingReady() {
+  return Boolean(uiState.instanceId || uiState.conversationId || uiState.routeHint);
+}
+
 async function refreshStateFromLocalHttp() {
   const payload = await callLocalJson("/app/state", {
     params: {
       instanceId: uiState.instanceId || undefined,
       conversationId: uiState.conversationId || undefined,
+      routeHint: uiState.routeHint || undefined,
     },
   });
   return normalizeState(payload?.state);
@@ -763,6 +835,7 @@ async function refreshStateFromServerTool() {
     arguments: {
       instance_id: uiState.instanceId || undefined,
       conversation_id: uiState.conversationId || undefined,
+      route_hint: uiState.routeHint || undefined,
     },
   }, {
     timeout: LOCAL_HTTP_TIMEOUT_MS,
@@ -780,6 +853,7 @@ async function sendAppMessageViaLocalHttp(message, previewMessage, attachmentsLi
       attachments: attachmentsList || undefined,
       instanceId: uiState.instanceId || undefined,
       conversationId: uiState.conversationId || undefined,
+      routeHint: uiState.routeHint || undefined,
     },
   });
   return normalizeState(payload?.state);
@@ -794,6 +868,7 @@ async function sendAppMessageViaServerTool(message, previewMessage, attachmentsL
       attachments: attachmentsList || undefined,
       instance_id: uiState.instanceId || undefined,
       conversation_id: uiState.conversationId || undefined,
+      route_hint: uiState.routeHint || undefined,
     },
   }, {
     timeout: LOCAL_SEND_TIMEOUT_MS,
@@ -809,12 +884,15 @@ async function sendAppMessageViaServerTool(message, previewMessage, attachmentsL
 
 function render() {
   const showPreview = Boolean(uiState.submittedMessage);
-  const showComposer = uiState.sending || uiState.waiting || uiState.activeTool;
+  const showComposer = shouldShowComposer();
   composerForm.hidden = !showComposer;
   sentPreview.hidden = !showPreview;
   errorBanner.hidden = !uiState.error;
   errorBanner.textContent = uiState.error;
-  messageInput.disabled = uiState.sending;
+  messageInput.disabled = uiState.sending || !isRoutingReady();
+  messageInput.placeholder = isRoutingReady()
+    ? "继续给 Agent 发消息... (/ 调出命令)"
+    : "会话初始化中，请稍候...";
 
   if (showPreview) {
     sentPreview.innerHTML = escapeHtml(uiState.submittedMessage);
@@ -823,6 +901,7 @@ function render() {
   }
 
   updateFakeCaret();
+  scheduleSizeSync();
 }
 
 /* ═══════════════════════════════════════════════════
@@ -843,8 +922,14 @@ async function refreshState() {
   uiState.conversationId = nextState.conversationId || uiState.conversationId;
   uiState.anyWaiting = nextState.anyWaiting;
   uiState.waiting = nextState.waiting;
+  if (nextState.waiting) {
+    uiState.activeTool = true;
+  }
   uiState.error = "";
   uiState.latestAiMessage = getLatestAiMessage(nextState.events);
+  if (uiState.latestAiMessage) {
+    uiState.routeHint = uiState.latestAiMessage;
+  }
 
   if (previewMessage) {
     uiState.submittedMessage = previewMessage;
@@ -918,6 +1003,11 @@ async function sendMessage() {
   const rawText = messageInput.value.trim();
   if (!rawText && attachments.length === 0) return;
   if (uiState.sending) return;
+  if (!isRoutingReady()) {
+    uiState.error = "会话初始化中，请稍后再试";
+    render();
+    return;
+  }
 
   const previewText = attachments.buildPreviewText(rawText);
 
@@ -1073,6 +1163,7 @@ window.addEventListener("resize", () => {
   if (isImageLightboxOpen()) {
     applyImageLightboxLayout();
   }
+  scheduleSizeSync();
 });
 
 window.addEventListener("keydown", (e) => {
@@ -1107,6 +1198,20 @@ messageInput.addEventListener("keyup", (e) => {
 });
 messageInput.addEventListener("focus", () => { updateFakeCaret(); });
 messageInput.addEventListener("blur", () => { updateFakeCaret(); });
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    scheduleSizeSync();
+  }
+});
+
+window.addEventListener("focus", () => {
+  scheduleSizeSync();
+});
+
+window.addEventListener("pageshow", () => {
+  scheduleSizeSync();
+});
 
 messageInput.addEventListener("paste", async (e) => {
   const cd = e.clipboardData;
@@ -1347,17 +1452,28 @@ app.ontoolinput = (params) => {
   uiState.anyWaiting = true; uiState.activeTool = true; uiState.waiting = true;
   uiState.completedTool = false; uiState.submittedMessage = ""; uiState.submittedAt = "";
   uiState.conversationId = extractConversationIdFromArgs(params?.arguments) || uiState.conversationId;
+  uiState.routeHint = extractRouteHintFromArgs(params?.arguments) || uiState.latestAiMessage || uiState.routeHint;
   void refreshState().catch((err) => { uiState.error = err instanceof Error ? err.message : "刷新失败"; render(); });
 };
 
 app.ontoolresult = (result) => {
   const nextState = extractPromptStateFromToolResult(result);
   uiState.conversationId = nextState.conversationId || uiState.conversationId;
+  uiState.waiting = false;
+  uiState.activeTool = false;
+  uiState.completedTool = true;
   void refreshState().catch(() => render());
 };
 
 app.ontoolcancelled = () => { uiState.anyWaiting = false; uiState.waiting = false; uiState.activeTool = false; render(); };
-app.onhostcontextchanged = (hostContext) => syncHostContext(hostContext);
+app.onhostcontextchanged = (hostContext) => {
+  const instanceChanged = syncHostContext(hostContext);
+  if (instanceChanged && uiState.connected) {
+    void refreshState().catch(() => render());
+    return;
+  }
+  render();
+};
 
 /* ═══════════════════════════════════════════════════
    Start
@@ -1369,6 +1485,7 @@ async function start() {
   await app.connect(new PostMessageTransport(window.parent, window.parent));
   syncHostContext(app.getHostContext());
   uiState.connected = true;
+  lastSyncedSize = { width: 0, height: 0 };
   render();
   await refreshState();
   pollTimer = window.setInterval(() => {

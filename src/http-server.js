@@ -349,6 +349,11 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
     const payload = req.body && typeof req.body === "object" ? req.body : {};
     const conversationId = payload.conversationId || payload.conversation_id;
     const instanceId = payload.instanceId || payload.instance_id;
+    const routeHint = typeof payload.routeHint === "string"
+      ? payload.routeHint
+      : typeof payload.route_hint === "string"
+        ? payload.route_hint
+        : "";
     const attachments = Array.isArray(payload.attachments) ? payload.attachments : [];
     const previewMessage = typeof payload.previewMessage === "string" && payload.previewMessage.trim()
       ? payload.previewMessage.trim()
@@ -356,10 +361,11 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
         ? payload.preview_message.trim()
         : buildPreviewFromInput(String(payload.message || ""), attachments);
 
-    if (instanceId) {
+    if (instanceId || conversationId || routeHint) {
       const session = sessionService.resolveSession({
         conversationId,
         instanceId,
+        aiResponseHint: routeHint,
       });
 
       if (!session) {
@@ -368,12 +374,13 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
       }
 
       sessionService.bindAppInstanceToSession(session, instanceId);
-      sessionService.rememberToolPreview(session, instanceId, previewMessage);
+      sessionService.rememberToolPreview(session, instanceId || session.currentAppInstanceId, previewMessage);
 
       if (sessionService.enqueueUserMessageWithAttachments(session, payload.message, previewMessage, attachments)) {
         const state = sessionService.getChatState({
           conversationId: session.conversationId,
           instanceId,
+          aiResponseHint: routeHint,
         });
         res.json({ ok: true, conversationId: session.conversationId, state });
         return;
@@ -409,10 +416,17 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
       : typeof req.query.instance_id === "string"
         ? req.query.instance_id
         : "";
+    const routeHint = typeof req.query.routeHint === "string"
+      ? req.query.routeHint
+      : typeof req.query.route_hint === "string"
+        ? req.query.route_hint
+        : "";
 
     const state = sessionService.getChatState({
       conversationId,
       instanceId,
+      aiResponseHint: routeHint,
+      allowClientSessionFallback: false,
     });
 
     res.json({

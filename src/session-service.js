@@ -39,6 +39,15 @@ function buildPreviewText(text, maxLength = 48) {
     : normalized;
 }
 
+function normalizeRouteHint(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized || null;
+}
+
 function normalizeAttachmentRef(item) {
   if (!item || typeof item !== "object") {
     return null;
@@ -603,21 +612,61 @@ export class SessionService {
     return this.clientSessionToConversationId.get(normalizedClientSessionId) || null;
   }
 
+  resolveConversationIdForAiResponseHint(aiResponseHint) {
+    const normalizedHint = normalizeRouteHint(aiResponseHint);
+    if (!normalizedHint) {
+      return null;
+    }
+
+    const matches = [...this.sessions.values()].filter((session) => {
+      if (session.waitingResolve === null) {
+        return false;
+      }
+
+      for (let i = session.chatEvents.length - 1; i >= 0; i -= 1) {
+        const event = session.chatEvents[i];
+        if (event?.role !== "ai") {
+          continue;
+        }
+
+        return normalizeRouteHint(event.text) === normalizedHint;
+      }
+
+      return false;
+    });
+
+    return matches.length === 1 ? matches[0].conversationId : null;
+  }
+
   getSingleWaitingSession() {
     const waitingSessions = [...this.sessions.values()].filter((session) => session.waitingResolve !== null);
     return waitingSessions.length === 1 ? waitingSessions[0] : null;
   }
 
-  resolveSession({ conversationId, instanceId, clientSessionId, createIfMissing = false } = {}) {
-    const normalizedConversationId =
-      normalizeConversationId(conversationId)
-      || this.resolveConversationIdForInstance(instanceId)
-      || this.resolveConversationIdForClientSession(clientSessionId);
+  resolveSession({
+    conversationId,
+    instanceId,
+    clientSessionId,
+    aiResponseHint,
+    createIfMissing = false,
+    allowClientSessionFallback = true,
+  } = {}) {
+    const explicitConversationId = normalizeConversationId(conversationId);
+    const normalizedInstanceId = normalizeInstanceId(instanceId);
+    const normalizedClientSessionId = allowClientSessionFallback
+      ? normalizeInstanceId(clientSessionId)
+      : null;
 
-    if (normalizedConversationId) {
+    const resolvedConversationId =
+      explicitConversationId
+      || this.resolveConversationIdForInstance(normalizedInstanceId)
+      || this.resolveConversationIdForAiResponseHint(aiResponseHint)
+      || (normalizedClientSessionId ? this.resolveConversationIdForClientSession(normalizedClientSessionId) : null);
+
+    if (resolvedConversationId) {
       return createIfMissing
-        ? this.getOrCreateSession(normalizedConversationId)
-        : this.getSession(normalizedConversationId);
+        ? this.getOrCreateSession(resolvedConversationId)
+        : this.getSession(resolvedConversationId);
     }
 
     // 浏览器老入口可能没有 conversationId，这里保留“只有一个等待中会话时自动命中”的旧行为。
@@ -774,8 +823,14 @@ export class SessionService {
     };
   }
 
-  getChatState({ conversationId, instanceId, clientSessionId } = {}) {
-    const session = this.resolveSession({ conversationId, instanceId, clientSessionId });
+  getChatState({ conversationId, instanceId, clientSessionId, aiResponseHint, allowClientSessionFallback = true } = {}) {
+    const session = this.resolveSession({
+      conversationId,
+      instanceId,
+      clientSessionId,
+      aiResponseHint,
+      allowClientSessionFallback,
+    });
     const normalizedInstanceId = normalizeInstanceId(instanceId);
 
     if (!session) {

@@ -15356,11 +15356,12 @@ ${att.content || ""}
   var imageLightboxImg = document.getElementById("imageLightboxImg");
   var imageLightboxCaption = document.getElementById("imageLightboxCaption");
   var imageLightboxClose = document.getElementById("imageLightboxClose");
-  var app = new gQ({ name: "xiaohaha-chat-ui", version: "1.0.7" }, {}, { autoResize: true });
+  var app = new gQ({ name: "xiaohaha-chat-ui", version: "1.0.7" }, {}, { autoResize: false });
   var uiState = {
     connected: false,
     instanceId: "",
     conversationId: "",
+    routeHint: "",
     anyWaiting: false,
     waiting: false,
     activeTool: false,
@@ -15376,6 +15377,8 @@ ${att.content || ""}
   var dragCounter = 0;
   var isImageLightboxZoomed = false;
   var activeImageLightboxAttachment = null;
+  var sizeSyncScheduled = false;
+  var lastSyncedSize = { width: 0, height: 0 };
   var attachments = new AttachmentManager(attachmentBar);
   attachments.onError = (msg) => {
     uiState.error = msg;
@@ -15401,8 +15404,55 @@ ${att.content || ""}
       Math.min(messageInput.scrollHeight, INPUT_MAX_HEIGHT_PX)
     )}px`;
   }
+  function measureAppSize() {
+    const hostRoot = root.firstElementChild || root;
+    const width = Math.ceil(root.getBoundingClientRect().width || window.innerWidth);
+    const heightCandidates = [
+      root.scrollHeight,
+      root.offsetHeight,
+      root.getBoundingClientRect().height,
+      hostRoot?.scrollHeight,
+      hostRoot?.offsetHeight,
+      hostRoot?.getBoundingClientRect?.().height,
+      document.body?.scrollHeight,
+      document.body?.offsetHeight,
+      document.body?.getBoundingClientRect?.().height
+    ].filter((value) => Number.isFinite(value) && value > 0);
+    const height = Math.ceil(Math.max(...heightCandidates, 1));
+    return {
+      width,
+      height
+    };
+  }
+  function flushSizeSync() {
+    if (!uiState.connected || document.visibilityState === "hidden") {
+      return;
+    }
+    const nextSize = measureAppSize();
+    if (nextSize.width === lastSyncedSize.width && nextSize.height === lastSyncedSize.height) {
+      return;
+    }
+    lastSyncedSize = nextSize;
+    void app.sendSizeChanged(nextSize).catch(() => {
+    });
+  }
+  function scheduleSizeSync() {
+    if (sizeSyncScheduled) {
+      return;
+    }
+    sizeSyncScheduled = true;
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        sizeSyncScheduled = false;
+        flushSizeSync();
+      });
+    });
+  }
+  function shouldShowComposer() {
+    return uiState.sending || uiState.waiting || uiState.activeTool && !uiState.completedTool;
+  }
   function updateFakeCaret() {
-    const showComposer = uiState.sending || uiState.waiting || uiState.activeTool;
+    const showComposer = shouldShowComposer();
     const hasRealFocus = document.activeElement === messageInput;
     const showFakeCaret = showComposer && uiState.connected && !uiState.sending && !hasRealFocus && !messageInput.value && attachmentBar.hidden;
     fakeCaret.hidden = !showFakeCaret;
@@ -15835,9 +15885,11 @@ ${att.content || ""}
     if (hostContext?.theme) PQ(hostContext.theme);
     if (hostContext?.styles?.variables) qQ(hostContext.styles.variables);
     if (hostContext?.styles?.css?.fonts) TQ(hostContext.styles.css.fonts);
+    const previousInstanceId = uiState.instanceId;
     if (hostContext?.toolInfo?.id !== void 0 && hostContext?.toolInfo?.id !== null) {
       uiState.instanceId = String(hostContext.toolInfo.id);
     }
+    return previousInstanceId !== uiState.instanceId;
   }
   function normalizeState(state) {
     return {
@@ -15878,6 +15930,10 @@ ${att.content || ""}
     if (!args || typeof args !== "object") return "";
     return typeof args.conversation_id === "string" ? args.conversation_id : "";
   }
+  function extractRouteHintFromArgs(args) {
+    if (!args || typeof args !== "object") return "";
+    return typeof args.ai_response === "string" ? args.ai_response.trim() : "";
+  }
   function extractPromptStateFromToolResult(result) {
     const textBlocks = Array.isArray(result?.content) ? result.content.filter((item) => item?.type === "text" && typeof item.text === "string") : [];
     const combinedText = textBlocks.map((item) => item.text).join("\n");
@@ -15887,11 +15943,15 @@ ${att.content || ""}
       conversationId: conversationMatch?.[1]?.trim() || ""
     };
   }
+  function isRoutingReady() {
+    return Boolean(uiState.instanceId || uiState.conversationId || uiState.routeHint);
+  }
   async function refreshStateFromLocalHttp() {
     const payload = await callLocalJson("/app/state", {
       params: {
         instanceId: uiState.instanceId || void 0,
-        conversationId: uiState.conversationId || void 0
+        conversationId: uiState.conversationId || void 0,
+        routeHint: uiState.routeHint || void 0
       }
     });
     return normalizeState(payload?.state);
@@ -15901,7 +15961,8 @@ ${att.content || ""}
       name: "xiaohaha_get_chat_state",
       arguments: {
         instance_id: uiState.instanceId || void 0,
-        conversation_id: uiState.conversationId || void 0
+        conversation_id: uiState.conversationId || void 0,
+        route_hint: uiState.routeHint || void 0
       }
     }, {
       timeout: LOCAL_HTTP_TIMEOUT_MS
@@ -15917,7 +15978,8 @@ ${att.content || ""}
         previewMessage: previewMessage || void 0,
         attachments: attachmentsList || void 0,
         instanceId: uiState.instanceId || void 0,
-        conversationId: uiState.conversationId || void 0
+        conversationId: uiState.conversationId || void 0,
+        routeHint: uiState.routeHint || void 0
       }
     });
     return normalizeState(payload?.state);
@@ -15930,7 +15992,8 @@ ${att.content || ""}
         preview_message: previewMessage || void 0,
         attachments: attachmentsList || void 0,
         instance_id: uiState.instanceId || void 0,
-        conversation_id: uiState.conversationId || void 0
+        conversation_id: uiState.conversationId || void 0,
+        route_hint: uiState.routeHint || void 0
       }
     }, {
       timeout: LOCAL_SEND_TIMEOUT_MS
@@ -15941,18 +16004,20 @@ ${att.content || ""}
   }
   function render() {
     const showPreview = Boolean(uiState.submittedMessage);
-    const showComposer = uiState.sending || uiState.waiting || uiState.activeTool;
+    const showComposer = shouldShowComposer();
     composerForm.hidden = !showComposer;
     sentPreview.hidden = !showPreview;
     errorBanner.hidden = !uiState.error;
     errorBanner.textContent = uiState.error;
-    messageInput.disabled = uiState.sending;
+    messageInput.disabled = uiState.sending || !isRoutingReady();
+    messageInput.placeholder = isRoutingReady() ? "\u7EE7\u7EED\u7ED9 Agent \u53D1\u6D88\u606F... (/ \u8C03\u51FA\u547D\u4EE4)" : "\u4F1A\u8BDD\u521D\u59CB\u5316\u4E2D\uFF0C\u8BF7\u7A0D\u5019...";
     if (showPreview) {
       sentPreview.innerHTML = escapeHtml(uiState.submittedMessage);
     } else {
       sentPreview.innerHTML = "";
     }
     updateFakeCaret();
+    scheduleSizeSync();
   }
   async function refreshState() {
     let nextState = null;
@@ -15967,8 +16032,14 @@ ${att.content || ""}
     uiState.conversationId = nextState.conversationId || uiState.conversationId;
     uiState.anyWaiting = nextState.anyWaiting;
     uiState.waiting = nextState.waiting;
+    if (nextState.waiting) {
+      uiState.activeTool = true;
+    }
     uiState.error = "";
     uiState.latestAiMessage = getLatestAiMessage(nextState.events);
+    if (uiState.latestAiMessage) {
+      uiState.routeHint = uiState.latestAiMessage;
+    }
     if (previewMessage) {
       uiState.submittedMessage = previewMessage;
       uiState.completedTool = true;
@@ -16027,6 +16098,11 @@ ${att.content || ""}
     const rawText = messageInput.value.trim();
     if (!rawText && attachments.length === 0) return;
     if (uiState.sending) return;
+    if (!isRoutingReady()) {
+      uiState.error = "\u4F1A\u8BDD\u521D\u59CB\u5316\u4E2D\uFF0C\u8BF7\u7A0D\u540E\u518D\u8BD5";
+      render();
+      return;
+    }
     const previewText = attachments.buildPreviewText(rawText);
     uiState.sending = true;
     uiState.error = "";
@@ -16181,6 +16257,7 @@ ${att.content || ""}
     if (isImageLightboxOpen()) {
       applyImageLightboxLayout();
     }
+    scheduleSizeSync();
   });
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && isImageLightboxOpen()) {
@@ -16220,6 +16297,17 @@ ${att.content || ""}
   });
   messageInput.addEventListener("blur", () => {
     updateFakeCaret();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      scheduleSizeSync();
+    }
+  });
+  window.addEventListener("focus", () => {
+    scheduleSizeSync();
+  });
+  window.addEventListener("pageshow", () => {
+    scheduleSizeSync();
   });
   messageInput.addEventListener("paste", async (e) => {
     const cd = e.clipboardData;
@@ -16451,6 +16539,7 @@ ${att.content || ""}
     uiState.submittedMessage = "";
     uiState.submittedAt = "";
     uiState.conversationId = extractConversationIdFromArgs(params?.arguments) || uiState.conversationId;
+    uiState.routeHint = extractRouteHintFromArgs(params?.arguments) || uiState.latestAiMessage || uiState.routeHint;
     void refreshState().catch((err) => {
       uiState.error = err instanceof Error ? err.message : "\u5237\u65B0\u5931\u8D25";
       render();
@@ -16459,6 +16548,9 @@ ${att.content || ""}
   app.ontoolresult = (result) => {
     const nextState = extractPromptStateFromToolResult(result);
     uiState.conversationId = nextState.conversationId || uiState.conversationId;
+    uiState.waiting = false;
+    uiState.activeTool = false;
+    uiState.completedTool = true;
     void refreshState().catch(() => render());
   };
   app.ontoolcancelled = () => {
@@ -16467,13 +16559,21 @@ ${att.content || ""}
     uiState.activeTool = false;
     render();
   };
-  app.onhostcontextchanged = (hostContext) => syncHostContext(hostContext);
+  app.onhostcontextchanged = (hostContext) => {
+    const instanceChanged = syncHostContext(hostContext);
+    if (instanceChanged && uiState.connected) {
+      void refreshState().catch(() => render());
+      return;
+    }
+    render();
+  };
   async function start() {
     render();
     autoResizeInput(true);
     await app.connect(new N(window.parent, window.parent));
     syncHostContext(app.getHostContext());
     uiState.connected = true;
+    lastSyncedSize = { width: 0, height: 0 };
     render();
     await refreshState();
     pollTimer = window.setInterval(() => {

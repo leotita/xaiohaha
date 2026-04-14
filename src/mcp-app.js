@@ -969,6 +969,10 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
           .string()
           .optional()
           .describe("Logical conversation id for resolving the correct session when available."),
+        route_hint: z
+          .string()
+          .optional()
+          .describe("Last displayed AI response text, used as a first-round routing hint before conversation_id is available."),
       },
       _meta: {
         ui: {
@@ -976,11 +980,13 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         },
       },
     },
-    async ({ instance_id, conversation_id }, extra) => {
+    async ({ instance_id, conversation_id, route_hint }, extra) => {
       const state = sessionService.getChatState({
         conversationId: conversation_id,
         instanceId: instance_id,
         clientSessionId: extra.sessionId,
+        aiResponseHint: route_hint,
+        allowClientSessionFallback: false,
       });
 
       return {
@@ -1021,6 +1027,10 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
           .string()
           .optional()
           .describe("Logical conversation id for resolving the correct session when available."),
+        route_hint: z
+          .string()
+          .optional()
+          .describe("Last displayed AI response text, used as a first-round routing hint before conversation_id is available."),
       },
       _meta: {
         ui: {
@@ -1028,11 +1038,13 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         },
       },
     },
-    async ({ message, preview_message, attachments = [], instance_id, conversation_id }, extra) => {
+    async ({ message, preview_message, attachments = [], instance_id, conversation_id, route_hint }, extra) => {
       const session = sessionService.resolveSession({
         conversationId: conversation_id,
         instanceId: instance_id,
         clientSessionId: extra.sessionId,
+        aiResponseHint: route_hint,
+        allowClientSessionFallback: false,
       });
 
       if (!session) {
@@ -1040,6 +1052,8 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
           conversationId: conversation_id,
           instanceId: instance_id,
           clientSessionId: extra.sessionId,
+          aiResponseHint: route_hint,
+          allowClientSessionFallback: false,
         });
         return {
           isError: true,
@@ -1086,6 +1100,8 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         conversationId: conversation_id,
         instanceId: instance_id,
         clientSessionId: extra.sessionId,
+        aiResponseHint: route_hint,
+        allowClientSessionFallback: false,
       });
 
       return {
