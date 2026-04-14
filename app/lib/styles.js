@@ -521,6 +521,10 @@ export const STYLES = `
     background: rgba(255, 255, 255, 0.07);
   }
 
+  .xh-file-item.active {
+    align-items: flex-start;
+  }
+
   .xh-file-icon {
     display: inline-flex;
     align-items: center;
@@ -558,6 +562,13 @@ export const STYLES = `
     overflow: hidden;
     text-overflow: ellipsis;
     margin-top: 1px;
+  }
+
+  .xh-file-item.active .xh-file-path {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
   }
 
   .xh-file-meta {

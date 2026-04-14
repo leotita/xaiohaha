@@ -87,11 +87,12 @@ export class FileMentionPalette {
       .map((item, index) => {
         const meta = typeof item.size === "number" ? formatFileSize(item.size) : "项目文件";
         const pathLabel = this.formatPathLabel(item.path || "");
-        return `<button class="xh-file-item${index === this.selectedIndex ? " active" : ""}" data-file-index="${index}" type="button">
+        const fullLabel = [item.name || item.path || "", pathLabel].filter(Boolean).join("\n");
+        return `<button class="xh-file-item${index === this.selectedIndex ? " active" : ""}" data-file-index="${index}" type="button" title="${escapeHtml(fullLabel)}">
           <span class="xh-file-icon">@</span>
           <span class="xh-file-body">
-            <span class="xh-file-name">${escapeHtml(item.name || item.path || "")}</span>
-            <span class="xh-file-path">${escapeHtml(pathLabel)}</span>
+            <span class="xh-file-name" title="${escapeHtml(item.name || item.path || "")}">${escapeHtml(item.name || item.path || "")}</span>
+            <span class="xh-file-path" title="${escapeHtml(pathLabel)}">${escapeHtml(pathLabel)}</span>
           </span>
           <span class="xh-file-meta">${escapeHtml(meta)}</span>
         </button>`;

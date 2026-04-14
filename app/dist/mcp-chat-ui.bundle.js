@@ -14573,6 +14573,10 @@ container holding the app. Specify either width or maxWidth, and either height o
     background: rgba(255, 255, 255, 0.07);
   }
 
+  .xh-file-item.active {
+    align-items: flex-start;
+  }
+
   .xh-file-icon {
     display: inline-flex;
     align-items: center;
@@ -14610,6 +14614,13 @@ container holding the app. Specify either width or maxWidth, and either height o
     overflow: hidden;
     text-overflow: ellipsis;
     margin-top: 1px;
+  }
+
+  .xh-file-item.active .xh-file-path {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
   }
 
   .xh-file-meta {
@@ -15224,11 +15235,12 @@ ${att.content || ""}
       this.el.innerHTML = this.items.map((item, index) => {
         const meta = typeof item.size === "number" ? formatFileSize(item.size) : "\u9879\u76EE\u6587\u4EF6";
         const pathLabel = this.formatPathLabel(item.path || "");
-        return `<button class="xh-file-item${index === this.selectedIndex ? " active" : ""}" data-file-index="${index}" type="button">
+        const fullLabel = [item.name || item.path || "", pathLabel].filter(Boolean).join("\n");
+        return `<button class="xh-file-item${index === this.selectedIndex ? " active" : ""}" data-file-index="${index}" type="button" title="${escapeHtml(fullLabel)}">
           <span class="xh-file-icon">@</span>
           <span class="xh-file-body">
-            <span class="xh-file-name">${escapeHtml(item.name || item.path || "")}</span>
-            <span class="xh-file-path">${escapeHtml(pathLabel)}</span>
+            <span class="xh-file-name" title="${escapeHtml(item.name || item.path || "")}">${escapeHtml(item.name || item.path || "")}</span>
+            <span class="xh-file-path" title="${escapeHtml(pathLabel)}">${escapeHtml(pathLabel)}</span>
           </span>
           <span class="xh-file-meta">${escapeHtml(meta)}</span>
         </button>`;
