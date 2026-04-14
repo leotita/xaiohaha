@@ -12,6 +12,14 @@ import { escapeHtml, readAsDataUrl } from "./lib/utils.js";
 import { AttachmentManager } from "./lib/attachment-manager.js";
 import { CommandPalette } from "./lib/command-palette.js";
 import { FileMentionPalette } from "./lib/file-mention-palette.js";
+import {
+  ProjectMentionManager,
+  getEditorSelectionOffsets,
+  insertEditorText,
+  serializeEditorText,
+  setEditorSelectionRange,
+  setEditorText,
+} from "./lib/project-mention-manager.js";
 
 /* ── Inject styles ── */
 const styleEl = document.createElement("style");
@@ -24,6 +32,7 @@ const BROWSER_CHAT_BASE_URL = typeof window.__XIAOHAHA_BROWSER_CHAT_URL === "str
 const LOCAL_HTTP_TIMEOUT_MS = 4000;
 const LOCAL_SEND_TIMEOUT_MS = 8000;
 const LOCAL_UPLOAD_TIMEOUT_MS = 20000;
+const LOCAL_DIAGNOSTIC_TIMEOUT_MS = 1500;
 const FILE_MENTION_SEARCH_DEBOUNCE_MS = 60;
 
 /* ═══════════════════════════════════════════════════
@@ -38,6 +47,7 @@ const needsFullDom = !root.querySelector("#inputShell")
   || !root.querySelector("#fileMentionPalette")
   || !root.querySelector("#composerLayer")
   || !root.querySelector("#imageLightbox")
+  || root.querySelector("#messageInput")?.tagName !== "DIV"
   || !root.querySelector("#cmdPalette")?.closest("#inputShell")
   || !root.querySelector("#fileMentionPalette")?.closest("#inputShell");
 if (needsFullDom) {
@@ -51,12 +61,15 @@ if (needsFullDom) {
             <div class="xh-cmd-palette" id="cmdPalette" hidden></div>
             <div class="xh-attachments" id="attachmentBar" hidden></div>
             <div class="xh-fake-caret" id="fakeCaret" hidden></div>
-            <textarea
+            <div
               class="xh-input"
               id="messageInput"
-              rows="1"
-              placeholder="继续给 Agent 发消息... (/ 调出命令)"
-            ></textarea>
+              contenteditable="true"
+              role="textbox"
+              aria-multiline="true"
+              spellcheck="true"
+              data-placeholder="继续给 Agent 发消息... (/ 调出命令)"
+            ></div>
             <div class="xh-input-actions">
               <button class="xh-action-btn" id="openBrowserBtn" type="button" title="在浏览器继续输入">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg>
@@ -114,7 +127,7 @@ const imageLightboxClose = document.getElementById("imageLightboxClose");
    MCP App + State
    ═══════════════════════════════════════════════════ */
 
-const app = new App({ name: "xiaohaha-chat-ui", version: "1.0.7" }, {}, { autoResize: false });
+const app = new App({ name: "xiaohaha-chat-ui", version: "1.0.8" }, {}, { autoResize: false });
 
 const uiState = {
   connected: false,
@@ -123,6 +136,7 @@ const uiState = {
   routeHint: "",
   anyWaiting: false,
   waiting: false,
+  isCurrentView: false,
   activeTool: false,
   completedTool: false,
   error: "",
@@ -140,6 +154,65 @@ let activeImageLightboxAttachment = null;
 let sizeSyncScheduled = false;
 let lastSyncedSize = { width: 0, height: 0 };
 
+function installRichInputBridge(editorEl) {
+  let disabled = false;
+  let placeholder = editorEl.dataset.placeholder || "";
+
+  Object.defineProperty(editorEl, "value", {
+    configurable: true,
+    get() {
+      return serializeEditorText(editorEl);
+    },
+    set(nextValue) {
+      setEditorText(editorEl, nextValue);
+    },
+  });
+
+  Object.defineProperty(editorEl, "selectionStart", {
+    configurable: true,
+    get() {
+      return getEditorSelectionOffsets(editorEl).start;
+    },
+  });
+
+  Object.defineProperty(editorEl, "selectionEnd", {
+    configurable: true,
+    get() {
+      return getEditorSelectionOffsets(editorEl).end;
+    },
+  });
+
+  editorEl.setSelectionRange = (start, end = start) => {
+    setEditorSelectionRange(editorEl, start, end);
+  };
+
+  Object.defineProperty(editorEl, "disabled", {
+    configurable: true,
+    get() {
+      return disabled;
+    },
+    set(nextValue) {
+      disabled = Boolean(nextValue);
+      editorEl.contentEditable = disabled ? "false" : "true";
+      editorEl.classList.toggle("xh-input-disabled", disabled);
+      editorEl.setAttribute("aria-disabled", disabled ? "true" : "false");
+    },
+  });
+
+  Object.defineProperty(editorEl, "placeholder", {
+    configurable: true,
+    get() {
+      return placeholder;
+    },
+    set(nextValue) {
+      placeholder = String(nextValue || "");
+      editorEl.dataset.placeholder = placeholder;
+    },
+  });
+}
+
+installRichInputBridge(messageInput);
+
 /* ── Managers ── */
 
 const attachments = new AttachmentManager(attachmentBar);
@@ -148,6 +221,21 @@ attachments.onError = (msg) => {
   render();
 };
 attachments.onPreview = openImageLightbox;
+
+const mentions = new ProjectMentionManager(messageInput);
+mentions.onOpen = (mention) => {
+  void openProjectMention(mention);
+};
+mentions.onChange = () => {
+  autoResizeInput(true);
+  updateFakeCaret();
+  scheduleSizeSync();
+};
+mentions.onRemove = (chip) => {
+  if (chip?.kind === "snippet" && chip.attachmentId) {
+    attachments.remove(chip.attachmentId);
+  }
+};
 
 const cmdPalette = new CommandPalette(document.getElementById("cmdPalette"));
 cmdPalette.setAnchorEl(inputShell);
@@ -228,9 +316,8 @@ function scheduleSizeSync() {
 }
 
 function shouldShowComposer() {
-  // 当前卡片在 tool 尚未完成时需要保留输入框；
-  // 历史卡片一旦收到对应 toolresult，就不再展示输入框。
-  return uiState.sending || uiState.waiting || (uiState.activeTool && !uiState.completedTool);
+  // 只有当前活动视图需要持续展示输入框；历史卡片在同一会话继续等待时也应保持收起。
+  return uiState.sending || (uiState.isCurrentView && (uiState.anyWaiting || (uiState.activeTool && !uiState.completedTool)));
 }
 
 function updateFakeCaret() {
@@ -384,37 +471,6 @@ function getActiveMentionCandidate() {
   };
 }
 
-function applyInputValue(nextValue, caretPos) {
-  messageInput.value = nextValue;
-  autoResizeInput(true);
-  messageInput.focus();
-  messageInput.setSelectionRange(caretPos, caretPos);
-  updateFakeCaret();
-}
-
-function removeMentionToken(text, mention) {
-  const before = text.slice(0, mention.tokenStart);
-  const after = text.slice(mention.tokenEnd);
-  let nextText = before + after;
-  let caretPos = before.length;
-
-  const needsJoinSpace = before && after
-    && !/\s$/.test(before)
-    && !/^\s/.test(after);
-
-  if (needsJoinSpace) {
-    nextText = `${before} ${after}`;
-    caretPos = before.length + 1;
-  }
-  if (before.endsWith(" ") && after.startsWith(" ")) {
-    nextText = before + after.slice(1);
-  }
-  return {
-    text: nextText,
-    caretPos,
-  };
-}
-
 async function searchProjectFilesForMention(mention) {
   const currentSeq = ++mentionSearchSeq;
   activeMention = mention;
@@ -479,44 +535,78 @@ async function attachMentionedProjectFile(item) {
   if (!item?.path || !mention) return;
 
   try {
-    let file = null;
+    mentions.add(item, mention);
+    autoResizeInput(true);
+    uiState.error = "";
+    render();
+  } catch (error) {
+    uiState.error = error instanceof Error ? error.message : "插入文件路径失败";
+    render();
+    messageInput.focus();
+  }
+}
+
+function insertInlineSnippetAttachment(attId, selectionRange = null) {
+  const attachment = attachments.getById(attId);
+  if (!attachment) {
+    return false;
+  }
+
+  mentions.addInlineAttachment({
+    attachmentId: attId,
+    name: attachment.name,
+    path: attachment.filePath || "",
+  }, selectionRange);
+  return true;
+}
+
+function updateInlineSnippetAttachment(attId, patch = {}) {
+  attachments.updateById(attId, patch);
+  mentions.updateInlineAttachment(attId, {
+    name: patch.name,
+    path: Object.prototype.hasOwnProperty.call(patch, "filePath")
+      ? patch.filePath
+      : patch.path,
+  });
+}
+
+async function openProjectMention(mention) {
+  if (!mention?.path) {
+    return;
+  }
+
+  try {
+    let payload = null;
+
     try {
-      const payload = await callLocalJson("/app/project-file", {
-        params: {
-          path: item.path,
-        },
+      payload = await callLocalJson("/app/open-project-file", {
+        method: "POST",
         timeoutMs: LOCAL_SEND_TIMEOUT_MS,
+        body: {
+          path: mention.path,
+        },
       });
-      if (!payload?.ok) {
-        throw new Error(payload?.error || "读取文件失败");
-      }
-      file = payload;
     } catch {
       const result = await app.callServerTool({
-        name: "xiaohaha_read_project_file",
+        name: "xiaohaha_open_project_file",
         arguments: {
-          file_path: item.path,
+          file_path: mention.path,
         },
       }, {
         timeout: LOCAL_SEND_TIMEOUT_MS,
       });
 
-      file = result?.structuredContent;
-      if (result?.isError || !file?.ok) {
-        throw new Error(file?.error || "读取文件失败");
+      payload = result?.structuredContent;
+      if (result?.isError || !payload?.ok) {
+        throw new Error(payload?.error || "打开文件失败");
       }
     }
 
-    attachments.addProjectFile(file);
-
-    const nextInput = removeMentionToken(messageInput.value, mention);
-    applyInputValue(nextInput.text, nextInput.caretPos);
     uiState.error = "";
     render();
   } catch (error) {
-    uiState.error = error instanceof Error ? error.message : "读取文件失败";
+    uiState.error = error instanceof Error ? error.message : "打开文件失败";
     render();
-    messageInput.focus();
   }
 }
 
@@ -576,6 +666,46 @@ async function callLocalJson(pathname, { method = "GET", params, body, timeoutMs
   } finally {
     window.clearTimeout(timeoutId);
   }
+}
+
+async function sendDiagnosticsEvent(event, detail = {}) {
+  const payload = {
+    event,
+    detail,
+    instanceId: uiState.instanceId || undefined,
+    conversationId: uiState.conversationId || undefined,
+  };
+
+  try {
+    await callLocalJson("/app/log", {
+      method: "POST",
+      body: payload,
+      timeoutMs: LOCAL_DIAGNOSTIC_TIMEOUT_MS,
+    });
+    return;
+  } catch {}
+
+  if (!uiState.connected) {
+    return;
+  }
+
+  try {
+    await app.callServerTool({
+      name: "xiaohaha_log_app_event",
+      arguments: {
+        event,
+        detail,
+        instance_id: uiState.instanceId || undefined,
+        conversation_id: uiState.conversationId || undefined,
+      },
+    }, {
+      timeout: LOCAL_DIAGNOSTIC_TIMEOUT_MS,
+    });
+  } catch {}
+}
+
+function reportDiagnosticsEvent(event, detail = {}) {
+  void sendDiagnosticsEvent(event, detail);
 }
 
 async function uploadLocalAttachment({ type, name, mimeType, size, path, lineRef, encoding, body }) {
@@ -758,6 +888,7 @@ function normalizeState(state) {
     conversationId: typeof state?.conversationId === "string" ? state.conversationId : "",
     anyWaiting: Boolean(state?.anyWaiting),
     waiting: Boolean(state?.waiting),
+    isCurrentView: Boolean(state?.isCurrentView),
     previewMessage: typeof state?.previewMessage === "string" ? state.previewMessage : "",
     events: Array.isArray(state?.events) ? state.events : [],
   };
@@ -910,10 +1041,31 @@ function render() {
 
 async function refreshState() {
   let nextState = null;
+  let localState = null;
   try {
-    nextState = await refreshStateFromLocalHttp();
-  } catch {
-    nextState = await refreshStateFromServerTool();
+    localState = await refreshStateFromLocalHttp();
+  } catch {}
+
+  const hasResolvedLocalState = Boolean(
+    localState
+    && (
+      localState.conversationId
+      || localState.anyWaiting
+      || localState.waiting
+      || localState.isCurrentView
+      || (Array.isArray(localState.events) && localState.events.length > 0)
+      || localState.previewMessage
+    )
+  );
+
+  if (hasResolvedLocalState) {
+    nextState = localState;
+  } else {
+    try {
+      nextState = await refreshStateFromServerTool();
+    } catch {
+      nextState = localState;
+    }
   }
   if (!nextState) throw new Error("Failed to parse chat state from MCP response.");
 
@@ -922,6 +1074,7 @@ async function refreshState() {
   uiState.conversationId = nextState.conversationId || uiState.conversationId;
   uiState.anyWaiting = nextState.anyWaiting;
   uiState.waiting = nextState.waiting;
+  uiState.isCurrentView = nextState.isCurrentView;
   if (nextState.waiting) {
     uiState.activeTool = true;
   }
@@ -974,6 +1127,7 @@ function executeCommand(cmdId) {
       imageInput.click();
       break;
     case "clear":
+      mentions.clear();
       attachments.clear();
       uiState.error = "";
       render();
@@ -983,11 +1137,13 @@ function executeCommand(cmdId) {
         "📎  拖拽文件到输入框添加附件",
         "🖼️  Ctrl/Cmd+V 粘贴图片",
         "📋  从编辑器复制代码可保留文件名和行号",
+        "@   搜索项目文件并插入路径",
         "/   输入 / 调出命令菜单",
         "⏎  Enter 发送  ⇧⏎ 换行",
       ].join("\n");
       autoResizeInput(true);
       messageInput.focus();
+      messageInput.setSelectionRange(messageInput.value.length, messageInput.value.length);
       break;
     }
   }
@@ -1000,7 +1156,7 @@ function executeCommand(cmdId) {
 async function sendMessage() {
   mentionSearchSeq++;
   hideFileMentionPalette();
-  const rawText = messageInput.value.trim();
+  const rawText = mentions.buildMessageText();
   if (!rawText && attachments.length === 0) return;
   if (uiState.sending) return;
   if (!isRoutingReady()) {
@@ -1009,17 +1165,22 @@ async function sendMessage() {
     return;
   }
 
-  const previewText = attachments.buildPreviewText(rawText);
+  const previewText = attachments.buildPreviewText(mentions.buildPreviewText());
 
   uiState.sending = true;
   uiState.error = "";
   uiState.anyWaiting = false;
   uiState.waiting = false;
+  uiState.isCurrentView = true;
   uiState.activeTool = false;
   uiState.completedTool = true;
   uiState.submittedMessage = previewText;
   uiState.submittedAt = new Date().toLocaleTimeString();
   uiState.latestAiMessage = "";
+  reportDiagnosticsEvent("ui_send_message_started", {
+    previewText,
+    attachmentCount: attachments.length,
+  });
   render();
 
   try {
@@ -1039,12 +1200,18 @@ async function sendMessage() {
       uiState.conversationId = nextState.conversationId || uiState.conversationId;
       uiState.anyWaiting = nextState.anyWaiting;
       uiState.waiting = nextState.waiting;
+      uiState.isCurrentView = nextState.isCurrentView;
       uiState.latestAiMessage = getLatestAiMessage(nextState.events);
       const pm = nextState.previewMessage.trim();
       if (pm) {
         uiState.submittedMessage = pm;
         uiState.completedTool = true;
       }
+      reportDiagnosticsEvent("ui_send_message_succeeded", {
+        anyWaiting: nextState.anyWaiting,
+        waiting: nextState.waiting,
+        isCurrentView: nextState.isCurrentView,
+      });
     }
 
     messageInput.value = "";
@@ -1058,7 +1225,9 @@ async function sendMessage() {
     uiState.submittedMessage = "";
     uiState.submittedAt = "";
     uiState.error = error instanceof Error ? error.message : "发送失败";
-    messageInput.value = rawText;
+    reportDiagnosticsEvent("ui_send_message_failed", {
+      message: error instanceof Error ? error.message : "发送失败",
+    });
     autoResizeInput();
   } finally {
     uiState.sending = false;
@@ -1122,14 +1291,48 @@ messageInput.addEventListener("keydown", (e) => {
     if (e.key === "Tab") {
       e.preventDefault();
       const label = cmdPalette.getSelectedLabel();
-      if (label) { messageInput.value = label + " "; autoResizeInput(true); }
+      if (label) {
+        messageInput.value = label + " ";
+        autoResizeInput(true);
+        messageInput.focus();
+        messageInput.setSelectionRange(messageInput.value.length, messageInput.value.length);
+      }
       return;
     }
   }
 
-  if (e.key === "Escape" && attachments.length > 0) {
+  if ((e.key === "Backspace" || e.key === "Delete")) {
+    const direction = e.key === "Backspace" ? "backward" : "forward";
+    if (mentions.handleDeleteKey(direction)) {
+      e.preventDefault();
+      autoResizeInput(true);
+      updateFakeCaret();
+      scheduleSizeSync();
+      return;
+    }
+  }
+
+  if (mentions.hasSelection() && (
+    e.key.length === 1
+    || ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)
+  )) {
+    mentions.clearSelection();
+  }
+
+  if (e.key === "Escape" && (attachments.length > 0 || mentions.length > 0)) {
     e.preventDefault();
+    mentions.clear();
     attachments.clear();
+    updateFakeCaret();
+    scheduleSizeSync();
+    return;
+  }
+
+  if (e.key === "Enter" && e.shiftKey) {
+    e.preventDefault();
+    insertEditorText(messageInput, "\n");
+    autoResizeInput(true);
+    refreshInlinePalettes();
     return;
   }
 
@@ -1180,6 +1383,7 @@ messageInput.addEventListener("compositionend", () => {
   refreshInlinePalettes();
 });
 messageInput.addEventListener("input", () => {
+  mentions.clearSelection();
   autoResizeInput();
   refreshInlinePalettes();
   updateFakeCaret();
@@ -1278,13 +1482,17 @@ messageInput.addEventListener("paste", async (e) => {
   }
 
   const rawText = cd.getData("text/plain");
+  const pasteSelection = getEditorSelectionOffsets(messageInput);
 
   const metaJson = cd.getData("application/vnd.code.copymetadata");
   if (metaJson && rawText) {
     e.preventDefault();
     mentionSearchSeq++;
     hideFileMentionPalette();
-    attachments.processCodeMeta(metaJson, rawText);
+    const attId = attachments.processCodeMeta(metaJson, rawText, { inlineChip: true });
+    if (attId > 0) {
+      insertInlineSnippetAttachment(attId, pasteSelection);
+    }
     return;
   }
 
@@ -1295,7 +1503,12 @@ messageInput.addEventListener("paste", async (e) => {
     e.preventDefault();
     mentionSearchSeq++;
     hideFileMentionPalette();
-    metaItem.getAsString((json) => attachments.processCodeMeta(json, rawText));
+    metaItem.getAsString((json) => {
+      const attId = attachments.processCodeMeta(json, rawText, { inlineChip: true });
+      if (attId > 0) {
+        insertInlineSnippetAttachment(attId, pasteSelection);
+      }
+    });
     return;
   }
 
@@ -1309,16 +1522,17 @@ messageInput.addEventListener("paste", async (e) => {
 
     const attId = attachments.add({
       type: "snippet",
-      name: `snippet.${lang}`,
+      name: `snippet.${lang} ⏳`,
       content: rawText,
       mimeType: "text/plain",
       size: new TextEncoder().encode(rawText).length,
       filePath: "",
       lineRef: "",
+      inlineChip: true,
     });
 
     if (attId > 0) {
-      attachments.updateById(attId, { name: `snippet.${lang} ⏳` });
+      insertInlineSnippetAttachment(attId, pasteSelection);
       app.callServerTool({
         name: "xiaohaha_locate_code",
         arguments: { code_text: rawText },
@@ -1329,16 +1543,18 @@ messageInput.addEventListener("paste", async (e) => {
           const lineLabel = loc.startLine === loc.endLine
             ? `(${loc.startLine})`
             : `(${loc.startLine}-${loc.endLine})`;
-          attachments.updateById(attId, {
+          updateInlineSnippetAttachment(attId, {
             name: `${fileName} ${lineLabel}`,
             filePath: loc.filePath,
-            lineRef: `:${loc.startLine}-${loc.endLine}`,
+            lineRef: loc.startLine === loc.endLine
+              ? `:${loc.startLine}`
+              : `:${loc.startLine}-${loc.endLine}`,
           });
         } else {
-          attachments.updateById(attId, { name: `snippet.${lang}` });
+          updateInlineSnippetAttachment(attId, { name: `snippet.${lang}` });
         }
       }).catch(() => {
-        attachments.updateById(attId, { name: `snippet.${lang}` });
+        updateInlineSnippetAttachment(attId, { name: `snippet.${lang}` });
       });
     }
     return;
@@ -1351,7 +1567,17 @@ messageInput.addEventListener("paste", async (e) => {
       mentionSearchSeq++;
       hideFileMentionPalette();
       await attachments.processFiles(pastedFiles);
+      updateFakeCaret();
+      return;
     }
+  }
+
+  if (rawText) {
+    e.preventDefault();
+    insertEditorText(messageInput, rawText);
+    autoResizeInput(true);
+    refreshInlinePalettes();
+    updateFakeCaret();
   }
 });
 
@@ -1399,8 +1625,8 @@ inputShell.addEventListener("drop", async (e) => {
 
     if (paths.length > 0) {
       const refs = paths.map((p) => `@${p}`).join("\n");
-      const cur = messageInput.value;
-      messageInput.value = cur ? cur + (cur.endsWith("\n") ? "" : "\n") + refs : refs;
+      const prefix = messageInput.value ? (messageInput.value.endsWith("\n") ? "" : "\n") : "";
+      insertEditorText(messageInput, `${prefix}${refs}`);
       autoResizeInput(true);
       messageInput.focus();
     }
@@ -1433,11 +1659,14 @@ imageInput.addEventListener("change", () => {
 });
 
 document.addEventListener("click", (e) => {
-  if (fileMentionPalette.visible && !fileMentionPalette.contains(e.target) && e.target !== messageInput) {
+  if (!messageInput.contains(e.target)) {
+    mentions.clearSelection();
+  }
+  if (fileMentionPalette.visible && !fileMentionPalette.contains(e.target) && !messageInput.contains(e.target)) {
     mentionSearchSeq++;
     hideFileMentionPalette();
   }
-  if (cmdPalette.visible && !cmdPalette.el.contains(e.target) && e.target !== messageInput) {
+  if (cmdPalette.visible && !cmdPalette.el.contains(e.target) && !messageInput.contains(e.target)) {
     cmdPalette.hide();
   }
 });
@@ -1450,26 +1679,77 @@ app.onteardown = async () => { if (pollTimer) { window.clearInterval(pollTimer);
 
 app.ontoolinput = (params) => {
   uiState.anyWaiting = true; uiState.activeTool = true; uiState.waiting = true;
+  uiState.isCurrentView = true;
   uiState.completedTool = false; uiState.submittedMessage = ""; uiState.submittedAt = "";
   uiState.conversationId = extractConversationIdFromArgs(params?.arguments) || uiState.conversationId;
   uiState.routeHint = extractRouteHintFromArgs(params?.arguments) || uiState.latestAiMessage || uiState.routeHint;
-  void refreshState().catch((err) => { uiState.error = err instanceof Error ? err.message : "刷新失败"; render(); });
+  reportDiagnosticsEvent("ui_tool_input", {
+    toolName: app.getHostContext()?.toolInfo?.tool?.name || "",
+    hasConversationId: Boolean(uiState.conversationId),
+    hasRouteHint: Boolean(uiState.routeHint),
+  });
+  void refreshState().catch((err) => {
+    uiState.error = err instanceof Error ? err.message : "刷新失败";
+    reportDiagnosticsEvent("ui_refresh_failed", {
+      source: "tool_input",
+      message: uiState.error,
+    });
+    render();
+  });
 };
 
 app.ontoolresult = (result) => {
+  const stateFromResult = extractState(result);
   const nextState = extractPromptStateFromToolResult(result);
+  if (stateFromResult) {
+    uiState.anyWaiting = stateFromResult.anyWaiting;
+    uiState.waiting = stateFromResult.waiting;
+    uiState.isCurrentView = stateFromResult.isCurrentView;
+    uiState.latestAiMessage = getLatestAiMessage(stateFromResult.events) || uiState.latestAiMessage;
+  }
   uiState.conversationId = nextState.conversationId || uiState.conversationId;
-  uiState.waiting = false;
+  uiState.waiting = stateFromResult?.waiting || false;
   uiState.activeTool = false;
   uiState.completedTool = true;
-  void refreshState().catch(() => render());
+  reportDiagnosticsEvent("ui_tool_result", {
+    toolName: app.getHostContext()?.toolInfo?.tool?.name || "",
+    isError: Boolean(result?.isError),
+    hasStructuredState: Boolean(stateFromResult),
+    anyWaiting: uiState.anyWaiting,
+    waiting: uiState.waiting,
+    isCurrentView: uiState.isCurrentView,
+  });
+  void refreshState().catch((err) => {
+    reportDiagnosticsEvent("ui_refresh_failed", {
+      source: "tool_result",
+      message: err instanceof Error ? err.message : "刷新失败",
+    });
+    render();
+  });
 };
 
-app.ontoolcancelled = () => { uiState.anyWaiting = false; uiState.waiting = false; uiState.activeTool = false; render(); };
+app.ontoolcancelled = () => {
+  uiState.anyWaiting = false; uiState.waiting = false; uiState.activeTool = false;
+  reportDiagnosticsEvent("ui_tool_cancelled", {
+    toolName: app.getHostContext()?.toolInfo?.tool?.name || "",
+  });
+  render();
+};
 app.onhostcontextchanged = (hostContext) => {
   const instanceChanged = syncHostContext(hostContext);
+  reportDiagnosticsEvent("ui_host_context_changed", {
+    toolName: hostContext?.toolInfo?.tool?.name || "",
+    instanceChanged,
+    instanceId: hostContext?.toolInfo?.id ?? "",
+  });
   if (instanceChanged && uiState.connected) {
-    void refreshState().catch(() => render());
+    void refreshState().catch((err) => {
+      reportDiagnosticsEvent("ui_refresh_failed", {
+        source: "host_context_changed",
+        message: err instanceof Error ? err.message : "刷新失败",
+      });
+      render();
+    });
     return;
   }
   render();
@@ -1480,17 +1760,27 @@ app.onhostcontextchanged = (hostContext) => {
    ═══════════════════════════════════════════════════ */
 
 async function start() {
+  reportDiagnosticsEvent("ui_boot", {
+    location: window.location.href,
+  });
   render();
   autoResizeInput(true);
   await app.connect(new PostMessageTransport(window.parent, window.parent));
   syncHostContext(app.getHostContext());
   uiState.connected = true;
+  reportDiagnosticsEvent("ui_connect_succeeded", {
+    toolName: app.getHostContext()?.toolInfo?.tool?.name || "",
+    instanceId: uiState.instanceId || "",
+  });
   lastSyncedSize = { width: 0, height: 0 };
   render();
   await refreshState();
   pollTimer = window.setInterval(() => {
     void refreshState().catch((err) => {
       uiState.connected = false; uiState.error = err instanceof Error ? err.message : "刷新失败"; render();
+      reportDiagnosticsEvent("ui_poll_failed", {
+        message: err instanceof Error ? err.message : "刷新失败",
+      });
     });
   }, POLL_INTERVAL_MS);
 }
@@ -1498,5 +1788,8 @@ async function start() {
 start().catch((err) => {
   uiState.connected = false;
   uiState.error = err instanceof Error ? err.message : "MCP App 初始化失败";
+  reportDiagnosticsEvent("ui_connect_failed", {
+    message: err instanceof Error ? err.message : "MCP App 初始化失败",
+  });
   render();
 });

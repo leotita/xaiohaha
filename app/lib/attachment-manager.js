@@ -1,11 +1,57 @@
 import { MAX_FILE_SIZE_BYTES, MAX_IMAGE_SIZE_BYTES, MAX_ATTACHMENTS } from "./constants.js";
 import { escapeHtml, formatFileSize, isTextFile, isImageFile, readAsText, readAsDataUrl } from "./utils.js";
 
+const RUNTIME_WORKSPACE_MARKER = "/runtime/workspace/";
+
 function normalizeAttachmentPath(filePath) {
-  return String(filePath || "")
+  let normalized = String(filePath || "")
     .replaceAll("\\", "/")
-    .replace(/^\.\//, "")
     .trim();
+
+  if (!normalized) {
+    return "";
+  }
+
+  if (normalized.startsWith("file://")) {
+    try {
+      normalized = decodeURIComponent(new URL(normalized).pathname);
+    } catch {}
+  }
+
+  const markerIndex = normalized.lastIndexOf(RUNTIME_WORKSPACE_MARKER);
+  if (markerIndex >= 0) {
+    normalized = normalized.slice(markerIndex + RUNTIME_WORKSPACE_MARKER.length);
+  }
+
+  const workspaceRoot = String(globalThis?.__XIAOHAHA_WORKSPACE_ROOT || "")
+    .replaceAll("\\", "/")
+    .replace(/\/+$/, "");
+  const normalizedLower = normalized.toLowerCase();
+  const workspaceLower = workspaceRoot.toLowerCase();
+
+  if (workspaceRoot && normalizedLower.startsWith(`${workspaceLower}/`)) {
+    normalized = normalized.slice(workspaceRoot.length + 1);
+  } else if (workspaceRoot && normalizedLower === workspaceLower) {
+    normalized = "";
+  }
+
+  return normalized
+    .replace(/^\.\//, "")
+    .replace(/^\/+/, "")
+    .trim();
+}
+
+function getDisplaySnippetName(baseName, startLine, endLine) {
+  const name = String(baseName || "snippet");
+  if (!Number.isFinite(startLine)) {
+    return name;
+  }
+
+  if (!Number.isFinite(endLine) || startLine === endLine) {
+    return `${name} (${startLine})`;
+  }
+
+  return `${name} (${startLine}-${endLine})`;
 }
 
 export class AttachmentManager {
@@ -19,6 +65,10 @@ export class AttachmentManager {
 
   get length() {
     return this.list.length;
+  }
+
+  getById(id) {
+    return this.list.find((item) => item.id === id) || null;
   }
 
   add(att) {
@@ -141,14 +191,15 @@ export class AttachmentManager {
   }
 
   renderBar() {
-    if (this.list.length === 0) {
+    const visibleList = this.list.filter((att) => !att.inlineChip);
+    if (visibleList.length === 0) {
       this.barEl.hidden = true;
       this.barEl.innerHTML = "";
       return;
     }
 
     this.barEl.hidden = false;
-    this.barEl.innerHTML = this.list
+    this.barEl.innerHTML = visibleList
       .map((att) => {
         const label = escapeHtml(att.filePath || att.name);
         if (att.type === "image") {
@@ -197,11 +248,13 @@ export class AttachmentManager {
     });
   }
 
-  processCodeMeta(metaJson, codeText) {
+  processCodeMeta(metaJson, codeText, options = {}) {
+    let attachment = null;
     try {
       const meta = JSON.parse(metaJson);
       const fileUri = meta?.source?.uri || meta?.uri || "";
       const range = meta?.source?.range || meta?.range || null;
+      const normalizedPath = normalizeAttachmentPath(fileUri);
 
       let fileName = fileUri
         ? fileUri.split("/").pop() || fileUri
@@ -210,6 +263,9 @@ export class AttachmentManager {
       if (fileUri.startsWith("file://")) {
         try { fileName = decodeURIComponent(new URL(fileUri).pathname.split("/").pop()); } catch {}
       }
+      if (normalizedPath) {
+        fileName = normalizedPath.split("/").pop() || fileName;
+      }
 
       const startLine = range?.startLineNumber ?? range?.start?.line ?? null;
       const endLine = range?.endLineNumber ?? range?.end?.line ?? null;
@@ -217,19 +273,17 @@ export class AttachmentManager {
         ? `:${startLine}-${endLine}`
         : startLine !== null ? `:${startLine}` : "";
 
-      const label = fileName + lineRef;
-
-      this.add({
+      attachment = {
         type: "snippet",
-        name: label,
+        name: getDisplaySnippetName(fileName, startLine, endLine),
         content: codeText,
         mimeType: "text/plain",
         size: new TextEncoder().encode(codeText).length,
-        filePath: fileUri ? (fileUri.startsWith("file://") ? (() => { try { return decodeURIComponent(new URL(fileUri).pathname); } catch { return ""; } })() : fileUri) : "",
+        filePath: normalizedPath,
         lineRef,
-      });
+      };
     } catch {
-      this.add({
+      attachment = {
         type: "snippet",
         name: "snippet",
         content: codeText,
@@ -237,8 +291,13 @@ export class AttachmentManager {
         size: new TextEncoder().encode(codeText).length,
         filePath: "",
         lineRef: "",
-      });
+      };
     }
+
+    return this.add({
+      ...attachment,
+      inlineChip: Boolean(options.inlineChip),
+    });
   }
 
   async prepareAttachmentRefs(uploadAttachment) {

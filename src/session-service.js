@@ -716,19 +716,32 @@ export class SessionService {
     return event;
   }
 
-  recordAiResponse(session, text) {
+  recordAiResponse(session, text, { dedupe = false } = {}) {
+    const normalizedText = typeof text === "string" ? text.trim() : "";
+    if (!session || !normalizedText) {
+      return null;
+    }
+
     if (session.pendingCompact) {
-      session.contextSummary = text;
+      session.contextSummary = normalizedText;
       session.pendingCompact = false;
     }
 
-    const event = this.recordChatEvent(session, "ai", text);
+    const lastEvent = session.chatEvents[session.chatEvents.length - 1] || null;
+    if (dedupe && lastEvent?.role === "ai" && lastEvent.text === normalizedText) {
+      this.touchSession(session);
+      this.persistSessionMetadata(session);
+      return lastEvent;
+    }
+
+    const event = this.recordChatEvent(session, "ai", normalizedText);
     session.aiResponses.push({
       id: event.id,
       text: event.text,
       time: event.time,
     });
     this.persistAiResponse(session, session.aiResponses[session.aiResponses.length - 1]);
+    return event;
   }
 
   waitForNextMessage(session, instanceId, clientSessionId) {
@@ -823,7 +836,14 @@ export class SessionService {
     };
   }
 
-  getChatState({ conversationId, instanceId, clientSessionId, aiResponseHint, allowClientSessionFallback = true } = {}) {
+  getChatState({
+    conversationId,
+    instanceId,
+    clientSessionId,
+    aiResponseHint,
+    allowClientSessionFallback = true,
+    bindInstance = false,
+  } = {}) {
     const session = this.resolveSession({
       conversationId,
       instanceId,
@@ -838,13 +858,14 @@ export class SessionService {
         conversationId: normalizeConversationId(conversationId) || "",
         anyWaiting: false,
         waiting: false,
+        isCurrentView: false,
         queueLength: 0,
         events: [],
         previewMessage: "",
       };
     }
 
-    if (normalizedInstanceId) {
+    if (bindInstance && normalizedInstanceId) {
       this.bindAppInstanceToSession(session, normalizedInstanceId);
     }
 
@@ -852,11 +873,15 @@ export class SessionService {
       session.waitingResolve !== null
       && normalizedInstanceId !== null
       && session.waitingToolInstanceId === normalizedInstanceId;
+    const isCurrentView =
+      normalizedInstanceId !== null
+      && session.currentAppInstanceId === normalizedInstanceId;
 
     return {
       conversationId: session.conversationId,
       anyWaiting: session.waitingResolve !== null,
       waiting: isCurrentInstanceWaiting,
+      isCurrentView,
       queueLength: session.messageQueue.length,
       events: session.chatEvents,
       previewMessage: normalizedInstanceId ? session.toolPreviewByInstanceId.get(normalizedInstanceId) || "" : "",

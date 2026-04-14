@@ -1,4 +1,4 @@
-import { escapeHtml, formatFileSize } from "./utils.js";
+import { escapeHtml } from "./utils.js";
 
 export class FileMentionPalette {
   constructor(el) {
@@ -85,7 +85,6 @@ export class FileMentionPalette {
 
     this.el.innerHTML = this.items
       .map((item, index) => {
-        const meta = typeof item.size === "number" ? formatFileSize(item.size) : "项目文件";
         const pathLabel = this.formatPathLabel(item.path || "");
         const fullLabel = [item.name || item.path || "", pathLabel].filter(Boolean).join("\n");
         return `<button class="xh-file-item${index === this.selectedIndex ? " active" : ""}" data-file-index="${index}" type="button" title="${escapeHtml(fullLabel)}">
@@ -94,7 +93,6 @@ export class FileMentionPalette {
             <span class="xh-file-name" title="${escapeHtml(item.name || item.path || "")}">${escapeHtml(item.name || item.path || "")}</span>
             <span class="xh-file-path" title="${escapeHtml(pathLabel)}">${escapeHtml(pathLabel)}</span>
           </span>
-          <span class="xh-file-meta">${escapeHtml(meta)}</span>
         </button>`;
       })
       .join("");

@@ -9,8 +9,9 @@ import express from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 
-import { BUNDLE_PATH, HOST, MCP_PATH, PORT } from "./config.js";
+import { BUNDLE_PATH, HOST, MCP_PATH, PORT, WORKSPACE_ROOT } from "./config.js";
 import { CHAT_PAGE_HTML } from "./http-chat-page.js";
+import { DiagnosticsBuffer } from "./diagnostics.js";
 import { buildPreviewFromInput, readProjectFile, searchProjectFiles } from "./mcp-app.js";
 import { createMcpServer } from "./mcp-server.js";
 import { debugLog } from "./process-manager.js";
@@ -62,6 +63,32 @@ function sendJsonRpcError(res, statusCode, message) {
     },
     id: null,
   });
+}
+
+function summarizeJsonRpcRequest(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return {};
+  }
+
+  const detail = {
+    jsonrpcMethod: typeof body.method === "string" ? body.method : "",
+    requestId: body.id ?? null,
+  };
+  const params = body.params && typeof body.params === "object" ? body.params : null;
+
+  if (detail.jsonrpcMethod === "tools/call" && params) {
+    const args = params.arguments && typeof params.arguments === "object" ? params.arguments : {};
+    detail.toolName = typeof params.name === "string" ? params.name : "";
+    detail.conversationId = typeof args.conversation_id === "string" ? args.conversation_id : "";
+    detail.instanceId = typeof args.instance_id === "string" ? args.instance_id : "";
+    detail.hasAiResponse = typeof args.ai_response === "string" && args.ai_response.trim().length > 0;
+    detail.messageLength = typeof args.message === "string" ? args.message.trim().length : 0;
+    detail.attachmentCount = Array.isArray(args.attachments) ? args.attachments.length : 0;
+  } else if (detail.jsonrpcMethod === "resources/read" && params) {
+    detail.resourceUri = typeof params.uri === "string" ? params.uri : "";
+  }
+
+  return detail;
 }
 
 function createHttpApp() {
@@ -137,10 +164,84 @@ function decodeAttachmentUploadBuffer(buffer, encoding) {
   return Buffer.from(match[2], "base64");
 }
 
+function normalizeProjectPath(filePath) {
+  let normalized = String(filePath || "")
+    .replaceAll("\\", "/")
+    .trim();
+
+  if (!normalized) {
+    return "";
+  }
+
+  if (normalized.startsWith("file://")) {
+    try {
+      normalized = decodeURIComponent(new URL(normalized).pathname);
+    } catch {}
+  }
+
+  const runtimeMarker = "/runtime/workspace/";
+  const markerIndex = normalized.lastIndexOf(runtimeMarker);
+  if (markerIndex >= 0) {
+    normalized = normalized.slice(markerIndex + runtimeMarker.length);
+  }
+
+  const workspaceRoot = String(WORKSPACE_ROOT || "")
+    .replaceAll("\\", "/")
+    .replace(/\/+$/, "");
+  const normalizedLower = normalized.toLowerCase();
+  const workspaceLower = workspaceRoot.toLowerCase();
+
+  if (workspaceRoot && normalizedLower.startsWith(`${workspaceLower}/`)) {
+    normalized = normalized.slice(workspaceRoot.length + 1);
+  } else if (workspaceRoot && normalizedLower === workspaceLower) {
+    normalized = "";
+  }
+
+  return normalized
+    .replace(/^\.\//, "")
+    .replace(/^\/+/, "")
+    .trim();
+}
+
+function isPathInsideWorkspace(workspaceRoot, targetPath) {
+  const relativePath = path.relative(workspaceRoot, targetPath);
+  return relativePath === ""
+    || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
+}
+
+async function resolveWorkspaceFilePath(filePath) {
+  const normalizedPath = normalizeProjectPath(filePath);
+  if (!normalizedPath) {
+    throw new Error("文件路径不能为空");
+  }
+
+  const fullPath = path.resolve(WORKSPACE_ROOT, normalizedPath);
+  if (!isPathInsideWorkspace(WORKSPACE_ROOT, fullPath)) {
+    throw new Error("只能打开当前项目内的文件");
+  }
+
+  const stat = await fs.stat(fullPath).catch(() => null);
+  if (!stat?.isFile()) {
+    throw new Error("未找到文件");
+  }
+
+  return {
+    fullPath,
+    relativePath: normalizedPath,
+  };
+}
+
 export function createChatHttpServer({ sessionService, attachmentStore }) {
   const app = createHttpApp();
   const mcpSessions = new Map();
   const startedAt = Date.now();
+  const diagnostics = new DiagnosticsBuffer();
+
+  function recordDiagnostic(type, detail = {}) {
+    const entry = diagnostics.record(type, detail);
+    debugLog(`[xiaohaha-mcp][diag] ${entry.type}`, entry.detail);
+    return entry;
+  }
 
   function getRuntimeStatus() {
     return {
@@ -151,6 +252,9 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
       uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
       mcpSessions: mcpSessions.size,
       chat: sessionService.getDiagnostics(),
+      diagnostics: {
+        count: diagnostics.count,
+      },
     };
   }
 
@@ -169,6 +273,7 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
     ]);
 
     debugLog(`[xiaohaha-mcp] Closed MCP HTTP session ${sessionId}`);
+    recordDiagnostic("mcp_session_closed", { mcpSessionId: sessionId });
     return true;
   }
 
@@ -202,9 +307,12 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
         };
         mcpSessions.set(transportSessionId, entry);
         debugLog(`[xiaohaha-mcp] Opened MCP HTTP session ${transportSessionId}`);
+        recordDiagnostic("mcp_session_opened", { mcpSessionId: transportSessionId });
       },
     });
-    const server = createMcpServer(sessionService, attachmentStore);
+    const server = createMcpServer(sessionService, attachmentStore, {
+      record: recordDiagnostic,
+    });
 
     transport.onclose = () => {
       if (transport.sessionId) {
@@ -222,6 +330,11 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
       if (!entry) {
         return;
       }
+
+      recordDiagnostic("mcp_request", {
+        mcpSessionId: entry.sessionId || entry.transport?.sessionId || "",
+        ...summarizeJsonRpcRequest(req.body),
+      });
 
       await entry.transport.handleRequest(req, res, req.body);
     } catch (error) {
@@ -288,6 +401,80 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
       ok: true,
       ...snapshot,
     });
+  });
+
+  app.get("/diagnostics", (req, res) => {
+    const parsedLimit = Number.parseInt(String(req.query.limit || ""), 10);
+    const limit = Number.isFinite(parsedLimit)
+      ? Math.max(1, Math.min(3000, parsedLimit))
+      : 100;
+    const typeQuery = typeof req.query.type === "string" ? req.query.type.trim() : "";
+    const conversationIdQuery = typeof req.query.conversationId === "string"
+      ? req.query.conversationId.trim()
+      : typeof req.query.conversation_id === "string"
+        ? req.query.conversation_id.trim()
+        : "";
+    const instanceIdQuery = typeof req.query.instanceId === "string"
+      ? req.query.instanceId.trim()
+      : typeof req.query.instance_id === "string"
+        ? req.query.instance_id.trim()
+        : "";
+
+    let entries = diagnostics.list(3000);
+
+    if (typeQuery) {
+      entries = entries.filter((entry) => entry.type.includes(typeQuery));
+    }
+
+    if (conversationIdQuery) {
+      entries = entries.filter((entry) =>
+        entry.detail?.conversationId === conversationIdQuery
+        || entry.detail?.conversation_id === conversationIdQuery
+      );
+    }
+
+    if (instanceIdQuery) {
+      entries = entries.filter((entry) =>
+        entry.detail?.instanceId === instanceIdQuery
+        || entry.detail?.instance_id === instanceIdQuery
+      );
+    }
+
+    res.json({
+      ok: true,
+      entries: entries.slice(-limit),
+    });
+  });
+
+  app.post("/app/log", (req, res) => {
+    const payload = req.body && typeof req.body === "object" ? req.body : {};
+    const event = typeof payload.event === "string" ? payload.event : "unknown";
+    const conversationId = payload.conversationId || payload.conversation_id || "";
+    const instanceId = payload.instanceId || payload.instance_id || "";
+    recordDiagnostic("app_view_event", {
+      event,
+      conversationId,
+      instanceId,
+      detail: payload.detail && typeof payload.detail === "object" ? payload.detail : {},
+    });
+
+    if ((event === "ui_tool_input" || event === "ui_host_context_changed") && instanceId) {
+      const session = sessionService.resolveSession({
+        conversationId,
+        instanceId,
+        allowClientSessionFallback: false,
+      });
+      if (session) {
+        sessionService.bindAppInstanceToSession(session, instanceId);
+        recordDiagnostic("app_view_bound_from_http_log", {
+          event,
+          conversationId: session.conversationId,
+          instanceId,
+        });
+      }
+    }
+
+    res.json({ ok: true });
   });
 
   app.post("/app/attachments", async (req, res) => {
@@ -361,6 +548,15 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
         ? payload.preview_message.trim()
         : buildPreviewFromInput(String(payload.message || ""), attachments);
 
+    recordDiagnostic("app_send_http", {
+      conversationId: conversationId || "",
+      instanceId: instanceId || "",
+      routeHint,
+      attachmentCount: attachments.length,
+      previewMessage,
+      hasMessage: typeof payload.message === "string" && payload.message.trim().length > 0,
+    });
+
     if (instanceId || conversationId || routeHint) {
       const session = sessionService.resolveSession({
         conversationId,
@@ -369,6 +565,12 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
       });
 
       if (!session) {
+        recordDiagnostic("app_send_http_failed", {
+          conversationId: conversationId || "",
+          instanceId: instanceId || "",
+          routeHint,
+          reason: "conversation_not_found",
+        });
         res.status(409).json({ ok: false, error: "conversation not found" });
         return;
       }
@@ -381,11 +583,24 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
           conversationId: session.conversationId,
           instanceId,
           aiResponseHint: routeHint,
+          bindInstance: false,
+        });
+        recordDiagnostic("app_send_http_enqueued", {
+          conversationId: session.conversationId,
+          instanceId: instanceId || session.currentAppInstanceId || "",
+          anyWaiting: state.anyWaiting,
+          waiting: state.waiting,
+          isCurrentView: state.isCurrentView,
         });
         res.json({ ok: true, conversationId: session.conversationId, state });
         return;
       }
 
+      recordDiagnostic("app_send_http_failed", {
+        conversationId: session.conversationId,
+        instanceId: instanceId || session.currentAppInstanceId || "",
+        reason: "empty_message",
+      });
       res.status(400).json({ ok: false, error: "empty" });
       return;
     }
@@ -393,15 +608,27 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
     const { session, error } = sessionService.resolveBrowserSession(conversationId);
 
     if (!session) {
+      recordDiagnostic("browser_send_failed", {
+        conversationId: conversationId || "",
+        reason: error || "conversation_not_found",
+      });
       res.status(409).json({ ok: false, error });
       return;
     }
 
     if (sessionService.enqueueUserMessageWithAttachments(session, payload.message, previewMessage, attachments)) {
+      recordDiagnostic("browser_send_enqueued", {
+        conversationId: session.conversationId,
+        attachmentCount: attachments.length,
+      });
       res.json({ ok: true, conversationId: session.conversationId });
       return;
     }
 
+    recordDiagnostic("browser_send_failed", {
+      conversationId: session.conversationId,
+      reason: "empty_message",
+    });
     res.status(400).json({ ok: false, error: "empty" });
   });
 
@@ -427,6 +654,17 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
       instanceId,
       aiResponseHint: routeHint,
       allowClientSessionFallback: false,
+      bindInstance: false,
+    });
+
+    recordDiagnostic("app_state_query", {
+      conversationId,
+      instanceId,
+      routeHint,
+      anyWaiting: state.anyWaiting,
+      waiting: state.waiting,
+      isCurrentView: state.isCurrentView,
+      queueLength: state.queueLength,
     });
 
     res.json({
@@ -461,6 +699,29 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
       res.status(400).json({
         ok: false,
         error: error instanceof Error ? error.message : "读取文件失败",
+      });
+    }
+  });
+
+  app.post("/app/open-project-file", async (req, res) => {
+    try {
+      const payload = req.body && typeof req.body === "object" ? req.body : {};
+      const { fullPath, relativePath } = await resolveWorkspaceFilePath(payload.path);
+
+      try {
+        await execFileAsync("/usr/bin/open", ["-a", "Cursor", fullPath]);
+      } catch {
+        await execFileAsync("/usr/bin/open", [fullPath]);
+      }
+
+      res.json({
+        ok: true,
+        path: relativePath,
+      });
+    } catch (error) {
+      res.status(400).json({
+        ok: false,
+        error: error instanceof Error ? error.message : "打开文件失败",
       });
     }
   });

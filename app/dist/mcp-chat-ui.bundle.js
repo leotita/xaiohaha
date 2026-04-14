@@ -14148,11 +14148,11 @@ container holding the app. Specify either width or maxWidth, and either height o
   }
 
   .xh-input {
+    display: block;
     width: 100%;
     min-height: 60px;
     max-height: 180px;
     padding: 16px 18px 8px;
-    resize: none;
     border: 0;
     border-radius: 18px;
     box-shadow: none;
@@ -14161,18 +14161,28 @@ container holding the app. Specify either width or maxWidth, and either height o
     font: inherit;
     line-height: 1.6;
     outline: none;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
     appearance: none;
     -webkit-appearance: none;
   }
 
-  .xh-input::placeholder {
+  .xh-input[data-placeholder]:empty::before {
+    content: attr(data-placeholder);
     color: var(--xh-muted);
+    pointer-events: none;
   }
 
   .xh-input:focus {
     border: 0;
     box-shadow: none;
     background: transparent;
+  }
+
+  .xh-input-disabled {
+    cursor: default;
+    opacity: 0.72;
   }
 
   .xh-fake-caret {
@@ -14225,6 +14235,145 @@ container holding the app. Specify either width or maxWidth, and either height o
   }
 
   .xh-ai-reply[hidden] {
+    display: none;
+  }
+
+  .xh-mention-chip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    box-sizing: border-box;
+    gap: 0.34em;
+    max-width: min(100%, 320px);
+    min-height: 1.42em;
+    margin: 0 0.28em 0 0;
+    padding: 0 0.48em 0 0.34em;
+    border-radius: 0.62em;
+    background: rgba(37, 99, 235, 0.14);
+    border: 1px solid rgba(59, 130, 246, 0.12);
+    color: #4ca6ff;
+    overflow: visible;
+    vertical-align: -0.08em;
+    user-select: none;
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+    font-size: 0.95em;
+    line-height: 1;
+  }
+
+  .xh-mention-chip:hover {
+    background: rgba(37, 99, 235, 0.2);
+    border-color: rgba(59, 130, 246, 0.22);
+  }
+
+  .xh-mention-chip.xh-mention-chip-selected {
+    background: rgba(59, 130, 246, 0.24);
+    border-color: rgba(96, 165, 250, 0.38);
+    color: #7ec3ff;
+    box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.16);
+  }
+
+  .xh-mention-open {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    max-width: 100%;
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    line-height: inherit;
+  }
+
+  .xh-mention-leading {
+    position: relative;
+    width: 1.02em;
+    height: 1.02em;
+    flex-shrink: 0;
+  }
+
+  .xh-mention-icon {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+    font-size: 0.68em;
+    font-weight: 700;
+    line-height: 1;
+    opacity: 0.95;
+    pointer-events: none;
+    transition: opacity 120ms ease, transform 120ms ease;
+  }
+
+  .xh-mention-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: inherit;
+    font-weight: 600;
+    line-height: inherit;
+  }
+
+  .xh-mention-remove {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.02em;
+    height: 1.02em;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease, color 120ms ease, transform 120ms ease;
+    font-size: 0.82em;
+    line-height: 1;
+    transform: scale(0.92);
+  }
+
+  .xh-mention-chip:hover .xh-mention-remove,
+  .xh-mention-chip.xh-mention-chip-selected .xh-mention-remove {
+    opacity: 0.96;
+    pointer-events: auto;
+    transform: scale(1);
+  }
+
+  .xh-mention-chip:hover .xh-mention-icon,
+  .xh-mention-chip.xh-mention-chip-selected .xh-mention-icon {
+    opacity: 0;
+    transform: scale(0.88);
+  }
+
+  .xh-mention-remove:hover {
+    color: #ffd0d0;
+  }
+
+  .xh-mention-tooltip {
+    position: fixed;
+    z-index: 9999;
+    padding: 6px 9px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(24, 24, 24, 0.98);
+    color: var(--xh-text);
+    font-size: 12px;
+    line-height: 1.35;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.34);
+    pointer-events: none;
+  }
+
+  .xh-mention-tooltip[hidden] {
     display: none;
   }
 
@@ -14596,6 +14745,7 @@ container holding the app. Specify either width or maxWidth, and either height o
     flex-direction: column;
     min-width: 0;
     flex: 1;
+    gap: 2px;
   }
 
   .xh-file-name {
@@ -14621,13 +14771,6 @@ container holding the app. Specify either width or maxWidth, and either height o
     overflow: visible;
     text-overflow: clip;
     overflow-wrap: anywhere;
-  }
-
-  .xh-file-meta {
-    color: var(--xh-muted);
-    font-size: 10px;
-    flex-shrink: 0;
-    margin-left: 6px;
   }
 
 `;
@@ -14742,8 +14885,41 @@ container holding the app. Specify either width or maxWidth, and either height o
   }
 
   // app/lib/attachment-manager.js
+  var RUNTIME_WORKSPACE_MARKER = "/runtime/workspace/";
   function normalizeAttachmentPath(filePath) {
-    return String(filePath || "").replaceAll("\\", "/").replace(/^\.\//, "").trim();
+    let normalized = String(filePath || "").replaceAll("\\", "/").trim();
+    if (!normalized) {
+      return "";
+    }
+    if (normalized.startsWith("file://")) {
+      try {
+        normalized = decodeURIComponent(new URL(normalized).pathname);
+      } catch {
+      }
+    }
+    const markerIndex = normalized.lastIndexOf(RUNTIME_WORKSPACE_MARKER);
+    if (markerIndex >= 0) {
+      normalized = normalized.slice(markerIndex + RUNTIME_WORKSPACE_MARKER.length);
+    }
+    const workspaceRoot = String(globalThis?.__XIAOHAHA_WORKSPACE_ROOT || "").replaceAll("\\", "/").replace(/\/+$/, "");
+    const normalizedLower = normalized.toLowerCase();
+    const workspaceLower = workspaceRoot.toLowerCase();
+    if (workspaceRoot && normalizedLower.startsWith(`${workspaceLower}/`)) {
+      normalized = normalized.slice(workspaceRoot.length + 1);
+    } else if (workspaceRoot && normalizedLower === workspaceLower) {
+      normalized = "";
+    }
+    return normalized.replace(/^\.\//, "").replace(/^\/+/, "").trim();
+  }
+  function getDisplaySnippetName(baseName, startLine, endLine) {
+    const name = String(baseName || "snippet");
+    if (!Number.isFinite(startLine)) {
+      return name;
+    }
+    if (!Number.isFinite(endLine) || startLine === endLine) {
+      return `${name} (${startLine})`;
+    }
+    return `${name} (${startLine}-${endLine})`;
   }
   var AttachmentManager = class {
     constructor(barEl) {
@@ -14755,6 +14931,9 @@ container holding the app. Specify either width or maxWidth, and either height o
     }
     get length() {
       return this.list.length;
+    }
+    getById(id) {
+      return this.list.find((item) => item.id === id) || null;
     }
     add(att) {
       if (this.list.length >= MAX_ATTACHMENTS) {
@@ -14864,13 +15043,14 @@ container holding the app. Specify either width or maxWidth, and either height o
       });
     }
     renderBar() {
-      if (this.list.length === 0) {
+      const visibleList = this.list.filter((att) => !att.inlineChip);
+      if (visibleList.length === 0) {
         this.barEl.hidden = true;
         this.barEl.innerHTML = "";
         return;
       }
       this.barEl.hidden = false;
-      this.barEl.innerHTML = this.list.map((att) => {
+      this.barEl.innerHTML = visibleList.map((att) => {
         const label = escapeHtml(att.filePath || att.name);
         if (att.type === "image") {
           const src = att.content || att.objectUrl;
@@ -14914,11 +15094,13 @@ container holding the app. Specify either width or maxWidth, and either height o
         });
       });
     }
-    processCodeMeta(metaJson, codeText) {
+    processCodeMeta(metaJson, codeText, options = {}) {
+      let attachment = null;
       try {
         const meta = JSON.parse(metaJson);
         const fileUri = meta?.source?.uri || meta?.uri || "";
         const range = meta?.source?.range || meta?.range || null;
+        const normalizedPath = normalizeAttachmentPath(fileUri);
         let fileName = fileUri ? fileUri.split("/").pop() || fileUri : "snippet";
         if (fileUri.startsWith("file://")) {
           try {
@@ -14926,27 +15108,23 @@ container holding the app. Specify either width or maxWidth, and either height o
           } catch {
           }
         }
+        if (normalizedPath) {
+          fileName = normalizedPath.split("/").pop() || fileName;
+        }
         const startLine = range?.startLineNumber ?? range?.start?.line ?? null;
         const endLine = range?.endLineNumber ?? range?.end?.line ?? null;
         const lineRef = startLine !== null && endLine !== null ? `:${startLine}-${endLine}` : startLine !== null ? `:${startLine}` : "";
-        const label = fileName + lineRef;
-        this.add({
+        attachment = {
           type: "snippet",
-          name: label,
+          name: getDisplaySnippetName(fileName, startLine, endLine),
           content: codeText,
           mimeType: "text/plain",
           size: new TextEncoder().encode(codeText).length,
-          filePath: fileUri ? fileUri.startsWith("file://") ? (() => {
-            try {
-              return decodeURIComponent(new URL(fileUri).pathname);
-            } catch {
-              return "";
-            }
-          })() : fileUri : "",
+          filePath: normalizedPath,
           lineRef
-        });
+        };
       } catch {
-        this.add({
+        attachment = {
           type: "snippet",
           name: "snippet",
           content: codeText,
@@ -14954,8 +15132,12 @@ container holding the app. Specify either width or maxWidth, and either height o
           size: new TextEncoder().encode(codeText).length,
           filePath: "",
           lineRef: ""
-        });
+        };
       }
+      return this.add({
+        ...attachment,
+        inlineChip: Boolean(options.inlineChip)
+      });
     }
     async prepareAttachmentRefs(uploadAttachment) {
       const refs = [];
@@ -15233,7 +15415,6 @@ ${att.content || ""}
         return;
       }
       this.el.innerHTML = this.items.map((item, index) => {
-        const meta = typeof item.size === "number" ? formatFileSize(item.size) : "\u9879\u76EE\u6587\u4EF6";
         const pathLabel = this.formatPathLabel(item.path || "");
         const fullLabel = [item.name || item.path || "", pathLabel].filter(Boolean).join("\n");
         return `<button class="xh-file-item${index === this.selectedIndex ? " active" : ""}" data-file-index="${index}" type="button" title="${escapeHtml(fullLabel)}">
@@ -15242,7 +15423,6 @@ ${att.content || ""}
             <span class="xh-file-name" title="${escapeHtml(item.name || item.path || "")}">${escapeHtml(item.name || item.path || "")}</span>
             <span class="xh-file-path" title="${escapeHtml(pathLabel)}">${escapeHtml(pathLabel)}</span>
           </span>
-          <span class="xh-file-meta">${escapeHtml(meta)}</span>
         </button>`;
       }).join("");
       this.el.querySelectorAll(".xh-file-item").forEach((itemEl) => {
@@ -15288,6 +15468,749 @@ ${att.content || ""}
     }
   };
 
+  // app/lib/project-mention-manager.js
+  var CHIP_SELECTOR = "[data-xh-chip-kind]";
+  var SELECTED_CLASS = "xh-mention-chip-selected";
+  var RUNTIME_WORKSPACE_MARKER2 = "/runtime/workspace/";
+  var CHIP_KIND_MENTION = "mention";
+  var CHIP_KIND_SNIPPET = "snippet";
+  var INLINE_ATTACHMENT_SENTINEL = "\uFFFC";
+  function normalizeMentionPath(filePath) {
+    let normalized = String(filePath || "").replaceAll("\\", "/").trim();
+    if (!normalized) {
+      return "";
+    }
+    if (normalized.startsWith("file://")) {
+      try {
+        normalized = decodeURIComponent(new URL(normalized).pathname);
+      } catch {
+      }
+    }
+    const markerIndex = normalized.lastIndexOf(RUNTIME_WORKSPACE_MARKER2);
+    if (markerIndex >= 0) {
+      normalized = normalized.slice(markerIndex + RUNTIME_WORKSPACE_MARKER2.length);
+    }
+    const workspaceRoot = String(globalThis?.__XIAOHAHA_WORKSPACE_ROOT || "").replaceAll("\\", "/").replace(/\/+$/, "");
+    const normalizedLower = normalized.toLowerCase();
+    const workspaceLower = workspaceRoot.toLowerCase();
+    if (workspaceRoot && normalizedLower.startsWith(`${workspaceLower}/`)) {
+      normalized = normalized.slice(workspaceRoot.length + 1);
+    } else if (workspaceRoot && normalizedLower === workspaceLower) {
+      normalized = "";
+    }
+    return normalized.replace(/^\.\//, "").replace(/^\/+/, "").trim();
+  }
+  function formatChipTooltipPath(filePath, fallbackLabel = "") {
+    const normalized = normalizeMentionPath(filePath);
+    if (!normalized) {
+      return String(fallbackLabel || "");
+    }
+    return normalized.startsWith("./") ? normalized : `./${normalized}`;
+  }
+  function getChipKind(node) {
+    return String(node?.dataset?.xhChipKind || "");
+  }
+  function getChipSerializedText(node) {
+    if (!node?.dataset) {
+      return "";
+    }
+    if (typeof node.dataset.xhChipText === "string" && node.dataset.xhChipText.length > 0) {
+      return node.dataset.xhChipText;
+    }
+    if (getChipKind(node) === CHIP_KIND_MENTION) {
+      return normalizeMentionPath(node.dataset.xhMentionPath || "");
+    }
+    return "";
+  }
+  function getChipLength(node) {
+    return getChipSerializedText(node).length;
+  }
+  function getNodeIndex(node) {
+    return node?.parentNode ? Array.prototype.indexOf.call(node.parentNode.childNodes, node) : -1;
+  }
+  function serializeNode(node) {
+    if (!node) {
+      return "";
+    }
+    if (node.nodeType === Node.TEXT_NODE) {
+      return String(node.textContent || "").replaceAll("\xA0", " ");
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      return "";
+    }
+    if (node.matches?.(CHIP_SELECTOR)) {
+      return getChipSerializedText(node);
+    }
+    if (node.tagName === "BR") {
+      return "\n";
+    }
+    return Array.from(node.childNodes).map((child) => serializeNode(child)).join("");
+  }
+  function measureNode(node) {
+    return serializeNode(node).length;
+  }
+  function measureChildren(node, count) {
+    let total = 0;
+    const limit = Math.min(Number(count) || 0, node?.childNodes?.length || 0);
+    for (let i = 0; i < limit; i += 1) {
+      total += measureNode(node.childNodes[i]);
+    }
+    return total;
+  }
+  function calculatePointOffset(root2, targetNode, targetOffset) {
+    let total = 0;
+    let found = false;
+    function walk(node) {
+      if (!node || found) {
+        return;
+      }
+      if (node === targetNode) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          total += Math.min(Number(targetOffset) || 0, String(node.textContent || "").length);
+          found = true;
+          return;
+        }
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          total += measureChildren(node, targetOffset);
+          found = true;
+        }
+        return;
+      }
+      if (node.nodeType === Node.TEXT_NODE) {
+        total += String(node.textContent || "").length;
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) {
+        return;
+      }
+      if (node.matches?.(CHIP_SELECTOR)) {
+        total += getChipLength(node);
+        return;
+      }
+      if (node.tagName === "BR") {
+        total += 1;
+        return;
+      }
+      Array.from(node.childNodes).forEach((child) => walk(child));
+    }
+    walk(root2);
+    return total;
+  }
+  function resolveOffset(root2, targetOffset) {
+    let remaining = Math.max(0, Number(targetOffset) || 0);
+    let resolved = null;
+    function walk(node) {
+      if (!node || resolved) {
+        return;
+      }
+      if (node.nodeType === Node.TEXT_NODE) {
+        const length = String(node.textContent || "").length;
+        if (remaining <= length) {
+          resolved = { node, offset: remaining };
+          return;
+        }
+        remaining -= length;
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) {
+        return;
+      }
+      if (node.matches?.(CHIP_SELECTOR)) {
+        const length = getChipLength(node);
+        const index = getNodeIndex(node);
+        const parent = node.parentNode || root2;
+        if (remaining === 0) {
+          resolved = { node: parent, offset: Math.max(index, 0) };
+          return;
+        }
+        if (remaining <= length) {
+          resolved = { node: parent, offset: Math.max(index, 0) + 1 };
+          return;
+        }
+        remaining -= length;
+        return;
+      }
+      if (node.tagName === "BR") {
+        const index = getNodeIndex(node);
+        const parent = node.parentNode || root2;
+        if (remaining === 0) {
+          resolved = { node: parent, offset: Math.max(index, 0) };
+          return;
+        }
+        if (remaining <= 1) {
+          resolved = { node: parent, offset: Math.max(index, 0) + 1 };
+          return;
+        }
+        remaining -= 1;
+        return;
+      }
+      Array.from(node.childNodes).forEach((child) => walk(child));
+    }
+    walk(root2);
+    if (resolved) {
+      return resolved;
+    }
+    return {
+      node: root2,
+      offset: root2.childNodes.length
+    };
+  }
+  function serializeEditorText(root2) {
+    return Array.from(root2?.childNodes || []).map((node) => serializeNode(node)).join("");
+  }
+  function stripInlineAttachmentSentinel(text) {
+    return String(text || "").split(INLINE_ATTACHMENT_SENTINEL).join("");
+  }
+  function getEditorSelectionOffsets(root2) {
+    const selection = window.getSelection();
+    const fallback = serializeEditorText(root2).length;
+    if (!selection || selection.rangeCount === 0) {
+      return { start: fallback, end: fallback };
+    }
+    const range = selection.getRangeAt(0);
+    if (!root2.contains(range.startContainer) || !root2.contains(range.endContainer)) {
+      return { start: fallback, end: fallback };
+    }
+    return {
+      start: calculatePointOffset(root2, range.startContainer, range.startOffset),
+      end: calculatePointOffset(root2, range.endContainer, range.endOffset)
+    };
+  }
+  function setEditorSelectionRange(root2, start2, end = start2) {
+    const selection = window.getSelection();
+    if (!selection) {
+      return;
+    }
+    const startPoint = resolveOffset(root2, start2);
+    const endPoint = resolveOffset(root2, end);
+    const range = document.createRange();
+    range.setStart(startPoint.node, startPoint.offset);
+    range.setEnd(endPoint.node, endPoint.offset);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+  function setEditorText(root2, text) {
+    root2.innerHTML = "";
+    const value = String(text || "");
+    if (!value) {
+      return;
+    }
+    root2.appendChild(document.createTextNode(value));
+  }
+  function insertEditorText(root2, text) {
+    const value = String(text || "");
+    if (!value) {
+      return;
+    }
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || !root2.contains(selection.anchorNode)) {
+      root2.focus();
+      setEditorSelectionRange(root2, serializeEditorText(root2).length);
+    }
+    const activeSelection = window.getSelection();
+    if (!activeSelection || activeSelection.rangeCount === 0) {
+      return;
+    }
+    const range = activeSelection.getRangeAt(0);
+    range.deleteContents();
+    const textNode = document.createTextNode(value);
+    range.insertNode(textNode);
+    range.setStart(textNode, textNode.textContent.length);
+    range.collapse(true);
+    activeSelection.removeAllRanges();
+    activeSelection.addRange(range);
+    root2.normalize();
+  }
+  function createChip({
+    kind,
+    label,
+    path = "",
+    serializedText = "",
+    attachmentId = null,
+    iconText = "i"
+  }) {
+    const normalizedPath = normalizeMentionPath(path);
+    const chipLabel = String(label || normalizedPath.split("/").pop() || "");
+    const tooltipPath = formatChipTooltipPath(normalizedPath, chipLabel);
+    const chip = document.createElement("span");
+    chip.className = kind === CHIP_KIND_SNIPPET ? "xh-mention-chip xh-mention-chip--snippet" : "xh-mention-chip";
+    chip.contentEditable = "false";
+    chip.dataset.xhChipKind = kind;
+    chip.dataset.xhChipText = serializedText;
+    chip.dataset.xhChipName = chipLabel;
+    chip.dataset.xhChipPath = normalizedPath;
+    chip.dataset.xhChipTooltip = tooltipPath;
+    chip.title = tooltipPath;
+    if (kind === CHIP_KIND_MENTION) {
+      chip.dataset.xhMentionPath = normalizedPath;
+      chip.dataset.xhMentionName = chipLabel;
+    }
+    if (attachmentId !== null && attachmentId !== void 0) {
+      chip.dataset.xhChipAttachmentId = String(attachmentId);
+    }
+    const open = document.createElement("span");
+    open.className = "xh-mention-open";
+    open.title = tooltipPath;
+    const leading = document.createElement("span");
+    leading.className = "xh-mention-leading";
+    leading.title = tooltipPath;
+    const icon = document.createElement("span");
+    icon.className = "xh-mention-icon";
+    icon.textContent = iconText;
+    icon.title = tooltipPath;
+    const text = document.createElement("span");
+    text.className = "xh-mention-label";
+    text.textContent = chipLabel;
+    text.title = tooltipPath;
+    const remove = document.createElement("button");
+    remove.className = "xh-mention-remove";
+    remove.type = "button";
+    remove.dataset.xhMentionAction = "remove";
+    remove.setAttribute("aria-label", `\u5220\u9664 ${chipLabel}`);
+    remove.title = tooltipPath;
+    remove.textContent = "\xD7";
+    leading.appendChild(icon);
+    leading.appendChild(remove);
+    open.appendChild(leading);
+    open.appendChild(text);
+    chip.appendChild(open);
+    return chip;
+  }
+  function createMentionChip(item) {
+    const path = normalizeMentionPath(item?.path || "");
+    const label = item?.name || path.split("/").pop() || path;
+    return createChip({
+      kind: CHIP_KIND_MENTION,
+      label,
+      path,
+      serializedText: path,
+      iconText: "i"
+    });
+  }
+  function createSnippetChip(item) {
+    return createChip({
+      kind: CHIP_KIND_SNIPPET,
+      label: item?.name || "snippet",
+      path: item?.path || "",
+      serializedText: INLINE_ATTACHMENT_SENTINEL,
+      attachmentId: item?.attachmentId ?? null,
+      iconText: "#"
+    });
+  }
+  function getChipPayload(chip) {
+    const attachmentId = Number(chip?.dataset?.xhChipAttachmentId || "");
+    return {
+      kind: getChipKind(chip),
+      path: normalizeMentionPath(chip?.dataset?.xhChipPath || chip?.dataset?.xhMentionPath || ""),
+      name: String(chip?.dataset?.xhChipName || chip?.dataset?.xhMentionName || ""),
+      attachmentId: Number.isFinite(attachmentId) && attachmentId > 0 ? attachmentId : null
+    };
+  }
+  function getChipStartOffset(root2, chip) {
+    const index = getNodeIndex(chip);
+    const parent = chip?.parentNode || root2;
+    return calculatePointOffset(root2, parent, index);
+  }
+  function trimLeadingSpace(text) {
+    return String(text || "").startsWith(" ") ? String(text).slice(1) : String(text || "");
+  }
+  function trimTrailingSpace(text) {
+    return String(text || "").endsWith(" ") ? String(text).slice(0, -1) : String(text || "");
+  }
+  var ProjectMentionManager = class {
+    constructor(editorEl) {
+      this.editorEl = editorEl;
+      this.onOpen = null;
+      this.onChange = null;
+      this.onRemove = null;
+      this.tooltipEl = null;
+      this.hoveredChip = null;
+      this.handleMouseDown = this.handleMouseDown.bind(this);
+      this.handleClick = this.handleClick.bind(this);
+      this.handleMouseOver = this.handleMouseOver.bind(this);
+      this.handleMouseOut = this.handleMouseOut.bind(this);
+      this.handleMouseMove = this.handleMouseMove.bind(this);
+      this.handleViewportChange = this.handleViewportChange.bind(this);
+      this.editorEl.addEventListener("mousedown", this.handleMouseDown);
+      this.editorEl.addEventListener("click", this.handleClick);
+      this.editorEl.addEventListener("mouseover", this.handleMouseOver);
+      this.editorEl.addEventListener("mouseout", this.handleMouseOut);
+      this.editorEl.addEventListener("mousemove", this.handleMouseMove);
+      window.addEventListener("resize", this.handleViewportChange);
+      window.addEventListener("scroll", this.handleViewportChange, true);
+    }
+    get length() {
+      return this.editorEl.querySelectorAll(CHIP_SELECTOR).length;
+    }
+    getSelectedChip() {
+      return this.editorEl.querySelector(`.${SELECTED_CLASS}`);
+    }
+    hasSelection() {
+      return Boolean(this.getSelectedChip());
+    }
+    getText() {
+      return serializeEditorText(this.editorEl);
+    }
+    buildMessageText() {
+      return stripInlineAttachmentSentinel(this.getText()).trim();
+    }
+    buildPreviewText() {
+      return this.buildMessageText();
+    }
+    findInlineAttachmentChip(attachmentId) {
+      if (!attachmentId) {
+        return null;
+      }
+      return this.editorEl.querySelector(
+        `[data-xh-chip-kind="${CHIP_KIND_SNIPPET}"][data-xh-chip-attachment-id="${attachmentId}"]`
+      );
+    }
+    insertChip(chip, startOffset = null, endOffset = startOffset) {
+      if (!chip) {
+        return null;
+      }
+      if (startOffset === null || endOffset === null) {
+        const selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0 || !this.editorEl.contains(selection.anchorNode)) {
+          this.editorEl.focus();
+          setEditorSelectionRange(this.editorEl, serializeEditorText(this.editorEl).length);
+        }
+        const activeSelection = window.getSelection();
+        if (!activeSelection || activeSelection.rangeCount === 0) {
+          return null;
+        }
+        const range = activeSelection.getRangeAt(0);
+        range.deleteContents();
+        range.insertNode(chip);
+      } else {
+        const startPoint = resolveOffset(this.editorEl, startOffset);
+        const endPoint = resolveOffset(this.editorEl, endOffset);
+        const range = document.createRange();
+        range.setStart(startPoint.node, startPoint.offset);
+        range.setEnd(endPoint.node, endPoint.offset);
+        range.deleteContents();
+        range.insertNode(chip);
+      }
+      this.editorEl.normalize();
+      this.editorEl.focus();
+      const chipStart = getChipStartOffset(this.editorEl, chip);
+      setEditorSelectionRange(this.editorEl, chipStart + getChipLength(chip));
+      this.onChange?.();
+      return chip;
+    }
+    add(item, mention) {
+      const path = normalizeMentionPath(item?.path || "");
+      if (!path) {
+        return;
+      }
+      const chip = createMentionChip(item);
+      const startOffset = Math.max(0, Number(mention?.tokenStart) || 0);
+      const endOffset = Math.max(startOffset, Number(mention?.tokenEnd) || startOffset);
+      this.insertChip(chip, startOffset, endOffset);
+    }
+    addInlineAttachment(item, selectionRange = null) {
+      const chip = createSnippetChip(item);
+      if (selectionRange) {
+        const start2 = Math.max(0, Number(selectionRange.start) || 0);
+        const end = Math.max(start2, Number(selectionRange.end) || start2);
+        return this.insertChip(chip, start2, end);
+      }
+      return this.insertChip(chip);
+    }
+    updateInlineAttachment(attachmentId, patch = {}) {
+      const chip = this.findInlineAttachmentChip(attachmentId);
+      if (!chip) {
+        return false;
+      }
+      const nextName = String(patch.name || chip.dataset.xhChipName || "snippet");
+      const nextPath = normalizeMentionPath(
+        "path" in patch ? patch.path : chip.dataset.xhChipPath || ""
+      );
+      const nextTitle = nextPath || nextName;
+      chip.dataset.xhChipName = nextName;
+      chip.dataset.xhChipPath = nextPath;
+      chip.title = nextTitle;
+      const open = chip.querySelector(".xh-mention-open");
+      if (open) {
+        open.title = nextTitle;
+      }
+      const leading = chip.querySelector(".xh-mention-leading");
+      if (leading) {
+        leading.title = nextTitle;
+      }
+      const icon = chip.querySelector(".xh-mention-icon");
+      if (icon) {
+        icon.title = nextTitle;
+      }
+      const label = chip.querySelector(".xh-mention-label");
+      if (label) {
+        label.textContent = nextName;
+        label.title = nextTitle;
+      }
+      const remove = chip.querySelector(".xh-mention-remove");
+      if (remove) {
+        remove.setAttribute("aria-label", `\u5220\u9664 ${nextName}`);
+        remove.title = nextTitle;
+      }
+      return true;
+    }
+    clearSelection() {
+      const selected = this.getSelectedChip();
+      if (!selected) {
+        return false;
+      }
+      selected.classList.remove(SELECTED_CLASS);
+      return true;
+    }
+    selectChip(chip, focus = true) {
+      if (!chip || !this.editorEl.contains(chip)) {
+        return false;
+      }
+      const current = this.getSelectedChip();
+      if (current && current !== chip) {
+        current.classList.remove(SELECTED_CLASS);
+      }
+      chip.classList.add(SELECTED_CLASS);
+      if (focus) {
+        this.editorEl.focus();
+        const startOffset = getChipStartOffset(this.editorEl, chip);
+        setEditorSelectionRange(this.editorEl, startOffset + getChipLength(chip));
+      }
+      return true;
+    }
+    ensureTooltipEl() {
+      if (this.tooltipEl?.isConnected) {
+        return this.tooltipEl;
+      }
+      const tooltip = document.createElement("div");
+      tooltip.className = "xh-mention-tooltip";
+      tooltip.hidden = true;
+      tooltip.setAttribute("role", "tooltip");
+      document.body.appendChild(tooltip);
+      this.tooltipEl = tooltip;
+      return tooltip;
+    }
+    getTooltipText(chip) {
+      return String(chip?.dataset?.xhChipTooltip || "").trim();
+    }
+    positionTooltip(chip = this.hoveredChip) {
+      const tooltip = this.tooltipEl;
+      if (!tooltip || tooltip.hidden || !chip || !chip.isConnected) {
+        return;
+      }
+      const rect = chip.getBoundingClientRect();
+      const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+      const horizontalPadding = 12;
+      const gap = 8;
+      tooltip.style.left = "0px";
+      tooltip.style.top = "0px";
+      tooltip.style.maxWidth = `${Math.max(180, Math.min(560, viewportWidth - horizontalPadding * 2))}px`;
+      const tooltipRect = tooltip.getBoundingClientRect();
+      let left = rect.left;
+      if (left + tooltipRect.width > viewportWidth - horizontalPadding) {
+        left = viewportWidth - horizontalPadding - tooltipRect.width;
+      }
+      left = Math.max(horizontalPadding, left);
+      let top = rect.top - tooltipRect.height - gap;
+      if (top < horizontalPadding) {
+        top = rect.bottom + gap;
+      }
+      if (top + tooltipRect.height > viewportHeight - horizontalPadding) {
+        top = Math.max(horizontalPadding, rect.top - tooltipRect.height - gap);
+      }
+      tooltip.style.left = `${Math.round(left)}px`;
+      tooltip.style.top = `${Math.round(top)}px`;
+    }
+    showTooltip(chip) {
+      const tooltipText = this.getTooltipText(chip);
+      if (!tooltipText) {
+        this.hideTooltip();
+        return;
+      }
+      const tooltip = this.ensureTooltipEl();
+      tooltip.textContent = tooltipText;
+      tooltip.hidden = false;
+      this.hoveredChip = chip;
+      this.positionTooltip(chip);
+    }
+    hideTooltip() {
+      this.hoveredChip = null;
+      if (this.tooltipEl) {
+        this.tooltipEl.hidden = true;
+      }
+    }
+    removeChip(chip, focus = true, notify = true, emitRemove = true) {
+      if (!chip?.parentNode || !this.editorEl.contains(chip)) {
+        return;
+      }
+      if (this.hoveredChip === chip) {
+        this.hideTooltip();
+      }
+      const chipPayload = getChipPayload(chip);
+      const startOffset = getChipStartOffset(this.editorEl, chip);
+      const prevNode = chip.previousSibling;
+      const nextNode = chip.nextSibling;
+      chip.remove();
+      if (nextNode?.nodeType === Node.TEXT_NODE) {
+        nextNode.textContent = trimLeadingSpace(nextNode.textContent);
+      }
+      if (prevNode?.nodeType === Node.TEXT_NODE && nextNode?.nodeType === Node.TEXT_NODE) {
+        prevNode.textContent = trimTrailingSpace(prevNode.textContent);
+        if (prevNode.textContent && nextNode.textContent) {
+          prevNode.textContent = `${prevNode.textContent} ${nextNode.textContent}`;
+          nextNode.remove();
+        }
+      }
+      this.editorEl.normalize();
+      if (focus) {
+        this.editorEl.focus();
+        setEditorSelectionRange(this.editorEl, startOffset);
+      }
+      if (emitRemove) {
+        this.onRemove?.(chipPayload);
+      }
+      if (notify) {
+        this.onChange?.();
+      }
+    }
+    clear() {
+      const chips = Array.from(this.editorEl.querySelectorAll(CHIP_SELECTOR));
+      if (chips.length === 0) {
+        return;
+      }
+      this.hideTooltip();
+      chips.forEach((chip) => this.removeChip(chip, false, false, true));
+      this.editorEl.normalize();
+      this.onChange?.();
+    }
+    contains(target) {
+      return this.editorEl.contains(target);
+    }
+    removeSelectedChip() {
+      const chip = this.getSelectedChip();
+      if (!chip) {
+        return false;
+      }
+      this.removeChip(chip, true, true, true);
+      return true;
+    }
+    getAdjacentChip(direction) {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) {
+        return null;
+      }
+      const anchorNode = selection.anchorNode;
+      const anchorOffset = selection.anchorOffset;
+      if (!anchorNode || !this.editorEl.contains(anchorNode)) {
+        return null;
+      }
+      if (anchorNode.nodeType === Node.TEXT_NODE) {
+        const text = String(anchorNode.textContent || "");
+        if (direction === "backward" && anchorOffset > 0) {
+          return null;
+        }
+        if (direction === "forward" && anchorOffset < text.length) {
+          return null;
+        }
+        let sibling = direction === "backward" ? anchorNode.previousSibling : anchorNode.nextSibling;
+        while (sibling) {
+          if (sibling.nodeType === Node.ELEMENT_NODE && sibling.matches?.(CHIP_SELECTOR)) {
+            return sibling;
+          }
+          if (sibling.nodeType === Node.TEXT_NODE && String(sibling.textContent || "").length > 0) {
+            return null;
+          }
+          sibling = direction === "backward" ? sibling.previousSibling : sibling.nextSibling;
+        }
+        return null;
+      }
+      if (anchorNode.nodeType === Node.ELEMENT_NODE) {
+        const sibling = direction === "backward" ? anchorNode.childNodes[anchorOffset - 1] : anchorNode.childNodes[anchorOffset];
+        if (sibling?.nodeType === Node.ELEMENT_NODE && sibling.matches?.(CHIP_SELECTOR)) {
+          return sibling;
+        }
+      }
+      return null;
+    }
+    handleDeleteKey(direction) {
+      if (this.removeSelectedChip()) {
+        return true;
+      }
+      const adjacentChip = this.getAdjacentChip(direction);
+      if (!adjacentChip) {
+        return false;
+      }
+      this.removeChip(adjacentChip, true, true, true);
+      return true;
+    }
+    handleMouseDown(event) {
+      const chip = event.target?.closest?.(CHIP_SELECTOR);
+      if (!chip || !this.editorEl.contains(chip)) {
+        return;
+      }
+      event.preventDefault();
+    }
+    handleMouseOver(event) {
+      const chip = event.target?.closest?.(CHIP_SELECTOR);
+      if (!chip || !this.editorEl.contains(chip)) {
+        return;
+      }
+      this.showTooltip(chip);
+    }
+    handleMouseOut(event) {
+      const chip = event.target?.closest?.(CHIP_SELECTOR);
+      if (!chip || !this.editorEl.contains(chip)) {
+        return;
+      }
+      const relatedTarget = event.relatedTarget;
+      if (relatedTarget instanceof Node && chip.contains(relatedTarget)) {
+        return;
+      }
+      if (this.hoveredChip === chip) {
+        this.hideTooltip();
+      }
+    }
+    handleMouseMove(event) {
+      const chip = event.target?.closest?.(CHIP_SELECTOR);
+      if (!chip || !this.editorEl.contains(chip)) {
+        return;
+      }
+      if (this.hoveredChip !== chip) {
+        this.showTooltip(chip);
+        return;
+      }
+      this.positionTooltip(chip);
+    }
+    handleViewportChange() {
+      if (this.hoveredChip) {
+        this.positionTooltip(this.hoveredChip);
+      }
+    }
+    handleClick(event) {
+      const chip = event.target?.closest?.(CHIP_SELECTOR);
+      if (!chip || !this.editorEl.contains(chip)) {
+        this.hideTooltip();
+        this.clearSelection();
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const action = event.target?.closest?.("[data-xh-mention-action]")?.dataset?.xhMentionAction;
+      if (action === "remove") {
+        this.hideTooltip();
+        this.removeChip(chip, true, true, true);
+        return;
+      }
+      this.hideTooltip();
+      this.selectChip(chip, true);
+      const chipPayload = getChipPayload(chip);
+      if (chipPayload.path) {
+        this.onOpen?.(chipPayload);
+      }
+    }
+  };
+
   // app/mcp-chat-ui.js
   var styleEl = document.createElement("style");
   styleEl.textContent = STYLES;
@@ -15296,10 +16219,11 @@ ${att.content || ""}
   var LOCAL_HTTP_TIMEOUT_MS = 4e3;
   var LOCAL_SEND_TIMEOUT_MS = 8e3;
   var LOCAL_UPLOAD_TIMEOUT_MS = 2e4;
+  var LOCAL_DIAGNOSTIC_TIMEOUT_MS = 1500;
   var FILE_MENTION_SEARCH_DEBOUNCE_MS = 60;
   var root = document.getElementById("app");
   if (!root) throw new Error("Missing #app mount element.");
-  var needsFullDom = !root.querySelector("#inputShell") || !root.querySelector("#cmdPalette") || !root.querySelector("#fileMentionPalette") || !root.querySelector("#composerLayer") || !root.querySelector("#imageLightbox") || !root.querySelector("#cmdPalette")?.closest("#inputShell") || !root.querySelector("#fileMentionPalette")?.closest("#inputShell");
+  var needsFullDom = !root.querySelector("#inputShell") || !root.querySelector("#cmdPalette") || !root.querySelector("#fileMentionPalette") || !root.querySelector("#composerLayer") || !root.querySelector("#imageLightbox") || root.querySelector("#messageInput")?.tagName !== "DIV" || !root.querySelector("#cmdPalette")?.closest("#inputShell") || !root.querySelector("#fileMentionPalette")?.closest("#inputShell");
   if (needsFullDom) {
     root.innerHTML = `
     <div class="xh-root">
@@ -15311,12 +16235,15 @@ ${att.content || ""}
             <div class="xh-cmd-palette" id="cmdPalette" hidden></div>
             <div class="xh-attachments" id="attachmentBar" hidden></div>
             <div class="xh-fake-caret" id="fakeCaret" hidden></div>
-            <textarea
+            <div
               class="xh-input"
               id="messageInput"
-              rows="1"
-              placeholder="\u7EE7\u7EED\u7ED9 Agent \u53D1\u6D88\u606F... (/ \u8C03\u51FA\u547D\u4EE4)"
-            ></textarea>
+              contenteditable="true"
+              role="textbox"
+              aria-multiline="true"
+              spellcheck="true"
+              data-placeholder="\u7EE7\u7EED\u7ED9 Agent \u53D1\u6D88\u606F... (/ \u8C03\u51FA\u547D\u4EE4)"
+            ></div>
             <div class="xh-input-actions">
               <button class="xh-action-btn" id="openBrowserBtn" type="button" title="\u5728\u6D4F\u89C8\u5668\u7EE7\u7EED\u8F93\u5165">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg>
@@ -15368,7 +16295,7 @@ ${att.content || ""}
   var imageLightboxImg = document.getElementById("imageLightboxImg");
   var imageLightboxCaption = document.getElementById("imageLightboxCaption");
   var imageLightboxClose = document.getElementById("imageLightboxClose");
-  var app = new gQ({ name: "xiaohaha-chat-ui", version: "1.0.7" }, {}, { autoResize: false });
+  var app = new gQ({ name: "xiaohaha-chat-ui", version: "1.0.8" }, {}, { autoResize: false });
   var uiState = {
     connected: false,
     instanceId: "",
@@ -15376,6 +16303,7 @@ ${att.content || ""}
     routeHint: "",
     anyWaiting: false,
     waiting: false,
+    isCurrentView: false,
     activeTool: false,
     completedTool: false,
     error: "",
@@ -15391,12 +16319,77 @@ ${att.content || ""}
   var activeImageLightboxAttachment = null;
   var sizeSyncScheduled = false;
   var lastSyncedSize = { width: 0, height: 0 };
+  function installRichInputBridge(editorEl) {
+    let disabled = false;
+    let placeholder = editorEl.dataset.placeholder || "";
+    Object.defineProperty(editorEl, "value", {
+      configurable: true,
+      get() {
+        return serializeEditorText(editorEl);
+      },
+      set(nextValue) {
+        setEditorText(editorEl, nextValue);
+      }
+    });
+    Object.defineProperty(editorEl, "selectionStart", {
+      configurable: true,
+      get() {
+        return getEditorSelectionOffsets(editorEl).start;
+      }
+    });
+    Object.defineProperty(editorEl, "selectionEnd", {
+      configurable: true,
+      get() {
+        return getEditorSelectionOffsets(editorEl).end;
+      }
+    });
+    editorEl.setSelectionRange = (start2, end = start2) => {
+      setEditorSelectionRange(editorEl, start2, end);
+    };
+    Object.defineProperty(editorEl, "disabled", {
+      configurable: true,
+      get() {
+        return disabled;
+      },
+      set(nextValue) {
+        disabled = Boolean(nextValue);
+        editorEl.contentEditable = disabled ? "false" : "true";
+        editorEl.classList.toggle("xh-input-disabled", disabled);
+        editorEl.setAttribute("aria-disabled", disabled ? "true" : "false");
+      }
+    });
+    Object.defineProperty(editorEl, "placeholder", {
+      configurable: true,
+      get() {
+        return placeholder;
+      },
+      set(nextValue) {
+        placeholder = String(nextValue || "");
+        editorEl.dataset.placeholder = placeholder;
+      }
+    });
+  }
+  installRichInputBridge(messageInput);
   var attachments = new AttachmentManager(attachmentBar);
   attachments.onError = (msg) => {
     uiState.error = msg;
     render();
   };
   attachments.onPreview = openImageLightbox;
+  var mentions = new ProjectMentionManager(messageInput);
+  mentions.onOpen = (mention) => {
+    void openProjectMention(mention);
+  };
+  mentions.onChange = () => {
+    autoResizeInput(true);
+    updateFakeCaret();
+    scheduleSizeSync();
+  };
+  mentions.onRemove = (chip) => {
+    if (chip?.kind === "snippet" && chip.attachmentId) {
+      attachments.remove(chip.attachmentId);
+    }
+  };
   var cmdPalette = new CommandPalette(document.getElementById("cmdPalette"));
   cmdPalette.setAnchorEl(inputShell);
   cmdPalette.onExecute = executeCommand;
@@ -15461,7 +16454,7 @@ ${att.content || ""}
     });
   }
   function shouldShowComposer() {
-    return uiState.sending || uiState.waiting || uiState.activeTool && !uiState.completedTool;
+    return uiState.sending || uiState.isCurrentView && (uiState.anyWaiting || uiState.activeTool && !uiState.completedTool);
   }
   function updateFakeCaret() {
     const showComposer = shouldShowComposer();
@@ -15585,31 +16578,6 @@ ${att.content || ""}
       tokenEnd: caretPos
     };
   }
-  function applyInputValue(nextValue, caretPos) {
-    messageInput.value = nextValue;
-    autoResizeInput(true);
-    messageInput.focus();
-    messageInput.setSelectionRange(caretPos, caretPos);
-    updateFakeCaret();
-  }
-  function removeMentionToken(text, mention) {
-    const before = text.slice(0, mention.tokenStart);
-    const after = text.slice(mention.tokenEnd);
-    let nextText = before + after;
-    let caretPos = before.length;
-    const needsJoinSpace = before && after && !/\s$/.test(before) && !/^\s/.test(after);
-    if (needsJoinSpace) {
-      nextText = `${before} ${after}`;
-      caretPos = before.length + 1;
-    }
-    if (before.endsWith(" ") && after.startsWith(" ")) {
-      nextText = before + after.slice(1);
-    }
-    return {
-      text: nextText,
-      caretPos
-    };
-  }
   async function searchProjectFilesForMention(mention) {
     const currentSeq = ++mentionSearchSeq;
     activeMention = mention;
@@ -15665,41 +16633,68 @@ ${att.content || ""}
     hideFileMentionPalette();
     if (!item?.path || !mention) return;
     try {
-      let file2 = null;
+      mentions.add(item, mention);
+      autoResizeInput(true);
+      uiState.error = "";
+      render();
+    } catch (error40) {
+      uiState.error = error40 instanceof Error ? error40.message : "\u63D2\u5165\u6587\u4EF6\u8DEF\u5F84\u5931\u8D25";
+      render();
+      messageInput.focus();
+    }
+  }
+  function insertInlineSnippetAttachment(attId, selectionRange = null) {
+    const attachment = attachments.getById(attId);
+    if (!attachment) {
+      return false;
+    }
+    mentions.addInlineAttachment({
+      attachmentId: attId,
+      name: attachment.name,
+      path: attachment.filePath || ""
+    }, selectionRange);
+    return true;
+  }
+  function updateInlineSnippetAttachment(attId, patch = {}) {
+    attachments.updateById(attId, patch);
+    mentions.updateInlineAttachment(attId, {
+      name: patch.name,
+      path: Object.prototype.hasOwnProperty.call(patch, "filePath") ? patch.filePath : patch.path
+    });
+  }
+  async function openProjectMention(mention) {
+    if (!mention?.path) {
+      return;
+    }
+    try {
+      let payload = null;
       try {
-        const payload = await callLocalJson("/app/project-file", {
-          params: {
-            path: item.path
-          },
-          timeoutMs: LOCAL_SEND_TIMEOUT_MS
+        payload = await callLocalJson("/app/open-project-file", {
+          method: "POST",
+          timeoutMs: LOCAL_SEND_TIMEOUT_MS,
+          body: {
+            path: mention.path
+          }
         });
-        if (!payload?.ok) {
-          throw new Error(payload?.error || "\u8BFB\u53D6\u6587\u4EF6\u5931\u8D25");
-        }
-        file2 = payload;
       } catch {
         const result = await app.callServerTool({
-          name: "xiaohaha_read_project_file",
+          name: "xiaohaha_open_project_file",
           arguments: {
-            file_path: item.path
+            file_path: mention.path
           }
         }, {
           timeout: LOCAL_SEND_TIMEOUT_MS
         });
-        file2 = result?.structuredContent;
-        if (result?.isError || !file2?.ok) {
-          throw new Error(file2?.error || "\u8BFB\u53D6\u6587\u4EF6\u5931\u8D25");
+        payload = result?.structuredContent;
+        if (result?.isError || !payload?.ok) {
+          throw new Error(payload?.error || "\u6253\u5F00\u6587\u4EF6\u5931\u8D25");
         }
       }
-      attachments.addProjectFile(file2);
-      const nextInput = removeMentionToken(messageInput.value, mention);
-      applyInputValue(nextInput.text, nextInput.caretPos);
       uiState.error = "";
       render();
     } catch (error40) {
-      uiState.error = error40 instanceof Error ? error40.message : "\u8BFB\u53D6\u6587\u4EF6\u5931\u8D25";
+      uiState.error = error40 instanceof Error ? error40.message : "\u6253\u5F00\u6587\u4EF6\u5931\u8D25";
       render();
-      messageInput.focus();
     }
   }
   function buildLocalUrl(pathname, params) {
@@ -15749,6 +16744,43 @@ ${att.content || ""}
     } finally {
       window.clearTimeout(timeoutId);
     }
+  }
+  async function sendDiagnosticsEvent(event, detail = {}) {
+    const payload = {
+      event,
+      detail,
+      instanceId: uiState.instanceId || void 0,
+      conversationId: uiState.conversationId || void 0
+    };
+    try {
+      await callLocalJson("/app/log", {
+        method: "POST",
+        body: payload,
+        timeoutMs: LOCAL_DIAGNOSTIC_TIMEOUT_MS
+      });
+      return;
+    } catch {
+    }
+    if (!uiState.connected) {
+      return;
+    }
+    try {
+      await app.callServerTool({
+        name: "xiaohaha_log_app_event",
+        arguments: {
+          event,
+          detail,
+          instance_id: uiState.instanceId || void 0,
+          conversation_id: uiState.conversationId || void 0
+        }
+      }, {
+        timeout: LOCAL_DIAGNOSTIC_TIMEOUT_MS
+      });
+    } catch {
+    }
+  }
+  function reportDiagnosticsEvent(event, detail = {}) {
+    void sendDiagnosticsEvent(event, detail);
   }
   async function uploadLocalAttachment({ type, name, mimeType, size, path, lineRef, encoding, body }) {
     const url2 = buildLocalUrl("/app/attachments", {
@@ -15908,6 +16940,7 @@ ${att.content || ""}
       conversationId: typeof state?.conversationId === "string" ? state.conversationId : "",
       anyWaiting: Boolean(state?.anyWaiting),
       waiting: Boolean(state?.waiting),
+      isCurrentView: Boolean(state?.isCurrentView),
       previewMessage: typeof state?.previewMessage === "string" ? state.previewMessage : "",
       events: Array.isArray(state?.events) ? state.events : []
     };
@@ -16033,10 +17066,22 @@ ${att.content || ""}
   }
   async function refreshState() {
     let nextState = null;
+    let localState = null;
     try {
-      nextState = await refreshStateFromLocalHttp();
+      localState = await refreshStateFromLocalHttp();
     } catch {
-      nextState = await refreshStateFromServerTool();
+    }
+    const hasResolvedLocalState = Boolean(
+      localState && (localState.conversationId || localState.anyWaiting || localState.waiting || localState.isCurrentView || Array.isArray(localState.events) && localState.events.length > 0 || localState.previewMessage)
+    );
+    if (hasResolvedLocalState) {
+      nextState = localState;
+    } else {
+      try {
+        nextState = await refreshStateFromServerTool();
+      } catch {
+        nextState = localState;
+      }
     }
     if (!nextState) throw new Error("Failed to parse chat state from MCP response.");
     const previewMessage = nextState.previewMessage.trim();
@@ -16044,6 +17089,7 @@ ${att.content || ""}
     uiState.conversationId = nextState.conversationId || uiState.conversationId;
     uiState.anyWaiting = nextState.anyWaiting;
     uiState.waiting = nextState.waiting;
+    uiState.isCurrentView = nextState.isCurrentView;
     if (nextState.waiting) {
       uiState.activeTool = true;
     }
@@ -16086,6 +17132,7 @@ ${att.content || ""}
         imageInput.click();
         break;
       case "clear":
+        mentions.clear();
         attachments.clear();
         uiState.error = "";
         render();
@@ -16095,11 +17142,13 @@ ${att.content || ""}
           "\u{1F4CE}  \u62D6\u62FD\u6587\u4EF6\u5230\u8F93\u5165\u6846\u6DFB\u52A0\u9644\u4EF6",
           "\u{1F5BC}\uFE0F  Ctrl/Cmd+V \u7C98\u8D34\u56FE\u7247",
           "\u{1F4CB}  \u4ECE\u7F16\u8F91\u5668\u590D\u5236\u4EE3\u7801\u53EF\u4FDD\u7559\u6587\u4EF6\u540D\u548C\u884C\u53F7",
+          "@   \u641C\u7D22\u9879\u76EE\u6587\u4EF6\u5E76\u63D2\u5165\u8DEF\u5F84",
           "/   \u8F93\u5165 / \u8C03\u51FA\u547D\u4EE4\u83DC\u5355",
           "\u23CE  Enter \u53D1\u9001  \u21E7\u23CE \u6362\u884C"
         ].join("\n");
         autoResizeInput(true);
         messageInput.focus();
+        messageInput.setSelectionRange(messageInput.value.length, messageInput.value.length);
         break;
       }
     }
@@ -16107,7 +17156,7 @@ ${att.content || ""}
   async function sendMessage() {
     mentionSearchSeq++;
     hideFileMentionPalette();
-    const rawText = messageInput.value.trim();
+    const rawText = mentions.buildMessageText();
     if (!rawText && attachments.length === 0) return;
     if (uiState.sending) return;
     if (!isRoutingReady()) {
@@ -16115,16 +17164,21 @@ ${att.content || ""}
       render();
       return;
     }
-    const previewText = attachments.buildPreviewText(rawText);
+    const previewText = attachments.buildPreviewText(mentions.buildPreviewText());
     uiState.sending = true;
     uiState.error = "";
     uiState.anyWaiting = false;
     uiState.waiting = false;
+    uiState.isCurrentView = true;
     uiState.activeTool = false;
     uiState.completedTool = true;
     uiState.submittedMessage = previewText;
     uiState.submittedAt = (/* @__PURE__ */ new Date()).toLocaleTimeString();
     uiState.latestAiMessage = "";
+    reportDiagnosticsEvent("ui_send_message_started", {
+      previewText,
+      attachmentCount: attachments.length
+    });
     render();
     try {
       let nextState = null;
@@ -16139,12 +17193,18 @@ ${att.content || ""}
         uiState.conversationId = nextState.conversationId || uiState.conversationId;
         uiState.anyWaiting = nextState.anyWaiting;
         uiState.waiting = nextState.waiting;
+        uiState.isCurrentView = nextState.isCurrentView;
         uiState.latestAiMessage = getLatestAiMessage(nextState.events);
         const pm = nextState.previewMessage.trim();
         if (pm) {
           uiState.submittedMessage = pm;
           uiState.completedTool = true;
         }
+        reportDiagnosticsEvent("ui_send_message_succeeded", {
+          anyWaiting: nextState.anyWaiting,
+          waiting: nextState.waiting,
+          isCurrentView: nextState.isCurrentView
+        });
       }
       messageInput.value = "";
       attachments.clear();
@@ -16157,7 +17217,9 @@ ${att.content || ""}
       uiState.submittedMessage = "";
       uiState.submittedAt = "";
       uiState.error = error40 instanceof Error ? error40.message : "\u53D1\u9001\u5931\u8D25";
-      messageInput.value = rawText;
+      reportDiagnosticsEvent("ui_send_message_failed", {
+        message: error40 instanceof Error ? error40.message : "\u53D1\u9001\u5931\u8D25"
+      });
       autoResizeInput();
     } finally {
       uiState.sending = false;
@@ -16235,13 +17297,38 @@ ${att.content || ""}
         if (label) {
           messageInput.value = label + " ";
           autoResizeInput(true);
+          messageInput.focus();
+          messageInput.setSelectionRange(messageInput.value.length, messageInput.value.length);
         }
         return;
       }
     }
-    if (e.key === "Escape" && attachments.length > 0) {
+    if (e.key === "Backspace" || e.key === "Delete") {
+      const direction = e.key === "Backspace" ? "backward" : "forward";
+      if (mentions.handleDeleteKey(direction)) {
+        e.preventDefault();
+        autoResizeInput(true);
+        updateFakeCaret();
+        scheduleSizeSync();
+        return;
+      }
+    }
+    if (mentions.hasSelection() && (e.key.length === 1 || ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key))) {
+      mentions.clearSelection();
+    }
+    if (e.key === "Escape" && (attachments.length > 0 || mentions.length > 0)) {
       e.preventDefault();
+      mentions.clear();
       attachments.clear();
+      updateFakeCaret();
+      scheduleSizeSync();
+      return;
+    }
+    if (e.key === "Enter" && e.shiftKey) {
+      e.preventDefault();
+      insertEditorText(messageInput, "\n");
+      autoResizeInput(true);
+      refreshInlinePalettes();
       return;
     }
     if (e.key === "Enter" && !e.shiftKey) {
@@ -16286,6 +17373,7 @@ ${att.content || ""}
     refreshInlinePalettes();
   });
   messageInput.addEventListener("input", () => {
+    mentions.clearSelection();
     autoResizeInput();
     refreshInlinePalettes();
     updateFakeCaret();
@@ -16376,12 +17464,16 @@ ${att.content || ""}
       }
     }
     const rawText = cd.getData("text/plain");
+    const pasteSelection = getEditorSelectionOffsets(messageInput);
     const metaJson = cd.getData("application/vnd.code.copymetadata");
     if (metaJson && rawText) {
       e.preventDefault();
       mentionSearchSeq++;
       hideFileMentionPalette();
-      attachments.processCodeMeta(metaJson, rawText);
+      const attId = attachments.processCodeMeta(metaJson, rawText, { inlineChip: true });
+      if (attId > 0) {
+        insertInlineSnippetAttachment(attId, pasteSelection);
+      }
       return;
     }
     const metaItem = items.find(
@@ -16391,7 +17483,12 @@ ${att.content || ""}
       e.preventDefault();
       mentionSearchSeq++;
       hideFileMentionPalette();
-      metaItem.getAsString((json2) => attachments.processCodeMeta(json2, rawText));
+      metaItem.getAsString((json2) => {
+        const attId = attachments.processCodeMeta(json2, rawText, { inlineChip: true });
+        if (attId > 0) {
+          insertInlineSnippetAttachment(attId, pasteSelection);
+        }
+      });
       return;
     }
     const vsData = cd.getData("vscode-editor-data");
@@ -16406,15 +17503,16 @@ ${att.content || ""}
       }
       const attId = attachments.add({
         type: "snippet",
-        name: `snippet.${lang}`,
+        name: `snippet.${lang} \u23F3`,
         content: rawText,
         mimeType: "text/plain",
         size: new TextEncoder().encode(rawText).length,
         filePath: "",
-        lineRef: ""
+        lineRef: "",
+        inlineChip: true
       });
       if (attId > 0) {
-        attachments.updateById(attId, { name: `snippet.${lang} \u23F3` });
+        insertInlineSnippetAttachment(attId, pasteSelection);
         app.callServerTool({
           name: "xiaohaha_locate_code",
           arguments: { code_text: rawText }
@@ -16423,16 +17521,16 @@ ${att.content || ""}
           if (loc?.found) {
             const fileName = loc.filePath.split("/").pop() || loc.filePath;
             const lineLabel = loc.startLine === loc.endLine ? `(${loc.startLine})` : `(${loc.startLine}-${loc.endLine})`;
-            attachments.updateById(attId, {
+            updateInlineSnippetAttachment(attId, {
               name: `${fileName} ${lineLabel}`,
               filePath: loc.filePath,
-              lineRef: `:${loc.startLine}-${loc.endLine}`
+              lineRef: loc.startLine === loc.endLine ? `:${loc.startLine}` : `:${loc.startLine}-${loc.endLine}`
             });
           } else {
-            attachments.updateById(attId, { name: `snippet.${lang}` });
+            updateInlineSnippetAttachment(attId, { name: `snippet.${lang}` });
           }
         }).catch(() => {
-          attachments.updateById(attId, { name: `snippet.${lang}` });
+          updateInlineSnippetAttachment(attId, { name: `snippet.${lang}` });
         });
       }
       return;
@@ -16444,7 +17542,16 @@ ${att.content || ""}
         mentionSearchSeq++;
         hideFileMentionPalette();
         await attachments.processFiles(pastedFiles);
+        updateFakeCaret();
+        return;
       }
+    }
+    if (rawText) {
+      e.preventDefault();
+      insertEditorText(messageInput, rawText);
+      autoResizeInput(true);
+      refreshInlinePalettes();
+      updateFakeCaret();
     }
   });
   inputShell.addEventListener("dragenter", (e) => {
@@ -16497,8 +17604,8 @@ ${att.content || ""}
       });
       if (paths.length > 0) {
         const refs = paths.map((p) => `@${p}`).join("\n");
-        const cur = messageInput.value;
-        messageInput.value = cur ? cur + (cur.endsWith("\n") ? "" : "\n") + refs : refs;
+        const prefix = messageInput.value ? messageInput.value.endsWith("\n") ? "" : "\n" : "";
+        insertEditorText(messageInput, `${prefix}${refs}`);
         autoResizeInput(true);
         messageInput.focus();
       }
@@ -16528,11 +17635,14 @@ ${att.content || ""}
     }
   });
   document.addEventListener("click", (e) => {
-    if (fileMentionPalette.visible && !fileMentionPalette.contains(e.target) && e.target !== messageInput) {
+    if (!messageInput.contains(e.target)) {
+      mentions.clearSelection();
+    }
+    if (fileMentionPalette.visible && !fileMentionPalette.contains(e.target) && !messageInput.contains(e.target)) {
       mentionSearchSeq++;
       hideFileMentionPalette();
     }
-    if (cmdPalette.visible && !cmdPalette.el.contains(e.target) && e.target !== messageInput) {
+    if (cmdPalette.visible && !cmdPalette.el.contains(e.target) && !messageInput.contains(e.target)) {
       cmdPalette.hide();
     }
   });
@@ -16547,44 +17657,96 @@ ${att.content || ""}
     uiState.anyWaiting = true;
     uiState.activeTool = true;
     uiState.waiting = true;
+    uiState.isCurrentView = true;
     uiState.completedTool = false;
     uiState.submittedMessage = "";
     uiState.submittedAt = "";
     uiState.conversationId = extractConversationIdFromArgs(params?.arguments) || uiState.conversationId;
     uiState.routeHint = extractRouteHintFromArgs(params?.arguments) || uiState.latestAiMessage || uiState.routeHint;
+    reportDiagnosticsEvent("ui_tool_input", {
+      toolName: app.getHostContext()?.toolInfo?.tool?.name || "",
+      hasConversationId: Boolean(uiState.conversationId),
+      hasRouteHint: Boolean(uiState.routeHint)
+    });
     void refreshState().catch((err) => {
       uiState.error = err instanceof Error ? err.message : "\u5237\u65B0\u5931\u8D25";
+      reportDiagnosticsEvent("ui_refresh_failed", {
+        source: "tool_input",
+        message: uiState.error
+      });
       render();
     });
   };
   app.ontoolresult = (result) => {
+    const stateFromResult = extractState(result);
     const nextState = extractPromptStateFromToolResult(result);
+    if (stateFromResult) {
+      uiState.anyWaiting = stateFromResult.anyWaiting;
+      uiState.waiting = stateFromResult.waiting;
+      uiState.isCurrentView = stateFromResult.isCurrentView;
+      uiState.latestAiMessage = getLatestAiMessage(stateFromResult.events) || uiState.latestAiMessage;
+    }
     uiState.conversationId = nextState.conversationId || uiState.conversationId;
-    uiState.waiting = false;
+    uiState.waiting = stateFromResult?.waiting || false;
     uiState.activeTool = false;
     uiState.completedTool = true;
-    void refreshState().catch(() => render());
+    reportDiagnosticsEvent("ui_tool_result", {
+      toolName: app.getHostContext()?.toolInfo?.tool?.name || "",
+      isError: Boolean(result?.isError),
+      hasStructuredState: Boolean(stateFromResult),
+      anyWaiting: uiState.anyWaiting,
+      waiting: uiState.waiting,
+      isCurrentView: uiState.isCurrentView
+    });
+    void refreshState().catch((err) => {
+      reportDiagnosticsEvent("ui_refresh_failed", {
+        source: "tool_result",
+        message: err instanceof Error ? err.message : "\u5237\u65B0\u5931\u8D25"
+      });
+      render();
+    });
   };
   app.ontoolcancelled = () => {
     uiState.anyWaiting = false;
     uiState.waiting = false;
     uiState.activeTool = false;
+    reportDiagnosticsEvent("ui_tool_cancelled", {
+      toolName: app.getHostContext()?.toolInfo?.tool?.name || ""
+    });
     render();
   };
   app.onhostcontextchanged = (hostContext) => {
     const instanceChanged = syncHostContext(hostContext);
+    reportDiagnosticsEvent("ui_host_context_changed", {
+      toolName: hostContext?.toolInfo?.tool?.name || "",
+      instanceChanged,
+      instanceId: hostContext?.toolInfo?.id ?? ""
+    });
     if (instanceChanged && uiState.connected) {
-      void refreshState().catch(() => render());
+      void refreshState().catch((err) => {
+        reportDiagnosticsEvent("ui_refresh_failed", {
+          source: "host_context_changed",
+          message: err instanceof Error ? err.message : "\u5237\u65B0\u5931\u8D25"
+        });
+        render();
+      });
       return;
     }
     render();
   };
   async function start() {
+    reportDiagnosticsEvent("ui_boot", {
+      location: window.location.href
+    });
     render();
     autoResizeInput(true);
     await app.connect(new N(window.parent, window.parent));
     syncHostContext(app.getHostContext());
     uiState.connected = true;
+    reportDiagnosticsEvent("ui_connect_succeeded", {
+      toolName: app.getHostContext()?.toolInfo?.tool?.name || "",
+      instanceId: uiState.instanceId || ""
+    });
     lastSyncedSize = { width: 0, height: 0 };
     render();
     await refreshState();
@@ -16593,12 +17755,18 @@ ${att.content || ""}
         uiState.connected = false;
         uiState.error = err instanceof Error ? err.message : "\u5237\u65B0\u5931\u8D25";
         render();
+        reportDiagnosticsEvent("ui_poll_failed", {
+          message: err instanceof Error ? err.message : "\u5237\u65B0\u5931\u8D25"
+        });
       });
     }, POLL_INTERVAL_MS);
   }
   start().catch((err) => {
     uiState.connected = false;
     uiState.error = err instanceof Error ? err.message : "MCP App \u521D\u59CB\u5316\u5931\u8D25";
+    reportDiagnosticsEvent("ui_connect_failed", {
+      message: err instanceof Error ? err.message : "MCP App \u521D\u59CB\u5316\u5931\u8D25"
+    });
     render();
   });
 })();

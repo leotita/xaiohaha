@@ -321,6 +321,7 @@ async function status() {
   }
   console.log(`[xiaohaha-mcp] health endpoint: ${health?.ok ? "ok" : "unreachable"}`);
   console.log(`[xiaohaha-mcp] endpoint: ${MCP_ENDPOINT_URL}`);
+  console.log(`[xiaohaha-mcp] diagnostics: ${buildLocalUrl("/diagnostics")}`);
 
   if (runtimeStatus) {
     console.log(`[xiaohaha-mcp] uptime: ${runtimeStatus.uptimeSeconds}s`);

@@ -16,6 +16,7 @@ const PROJECT_IMAGE_FILE_MAX_BYTES = 5 * 1024 * 1024;
 const PROJECT_FILE_SEARCH_LIMIT = 20;
 const PROJECT_FILE_CACHE_TTL_MS = 10_000;
 const PROJECT_FILE_QUERY_CACHE_TTL_MS = 5_000;
+const RUNTIME_WORKSPACE_MARKER = "/runtime/workspace/";
 
 const SKIP_DIRS = new Set([
   "node_modules", ".git", "dist", ".next", "build", "coverage",
@@ -61,8 +62,38 @@ let projectFileSearchCache = {
 };
 
 function normalizeProjectPath(relPath) {
-  return String(relPath || "")
+  let normalized = String(relPath || "")
     .replaceAll("\\", "/")
+    .trim();
+
+  if (!normalized) {
+    return "";
+  }
+
+  if (normalized.startsWith("file://")) {
+    try {
+      normalized = decodeURIComponent(new URL(normalized).pathname);
+    } catch {}
+  }
+
+  const runtimeMarkerIndex = normalized.lastIndexOf(RUNTIME_WORKSPACE_MARKER);
+  if (runtimeMarkerIndex >= 0) {
+    normalized = normalized.slice(runtimeMarkerIndex + RUNTIME_WORKSPACE_MARKER.length);
+  }
+
+  const workspaceRoot = String(WORKSPACE_ROOT || "")
+    .replaceAll("\\", "/")
+    .replace(/\/+$/, "");
+  const normalizedLower = normalized.toLowerCase();
+  const workspaceLower = workspaceRoot.toLowerCase();
+
+  if (workspaceRoot && normalizedLower.startsWith(`${workspaceLower}/`)) {
+    normalized = normalized.slice(workspaceRoot.length + 1);
+  } else if (workspaceRoot && normalizedLower === workspaceLower) {
+    normalized = "";
+  }
+
+  return normalized
     .replace(/^\.\//, "")
     .replace(/^\/+/, "")
     .trim();
@@ -81,14 +112,26 @@ function getProjectFileBasename(relPath) {
   return path.posix.basename(normalizeProjectPath(relPath));
 }
 
+function toCompactSearchKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
 function buildProjectFileEntry(relPath) {
   const normalizedPath = normalizeProjectPath(relPath);
   const name = getProjectFileBasename(normalizedPath);
+  const ext = path.posix.extname(name);
+  const stem = ext ? name.slice(0, -ext.length) : name;
   return {
     path: normalizedPath,
     name,
     lowerPath: normalizedPath.toLowerCase(),
     lowerName: name.toLowerCase(),
+    lowerStem: stem.toLowerCase(),
+    compactPath: toCompactSearchKey(normalizedPath),
+    compactName: toCompactSearchKey(name),
+    compactStem: toCompactSearchKey(stem),
     length: normalizedPath.length,
   };
 }
@@ -198,6 +241,244 @@ async function getProjectFileIndex(projectRoot) {
   return entries;
 }
 
+function scoreSubsequenceMatch(target, query) {
+  if (!target || !query) {
+    return -1;
+  }
+
+  let lastIndex = -1;
+  let startIndex = -1;
+  let consecutiveBonus = 0;
+  let boundaryBonus = 0;
+  let gapPenalty = 0;
+  let streak = 0;
+
+  for (const char of query) {
+    const matchIndex = target.indexOf(char, lastIndex + 1);
+    if (matchIndex < 0) {
+      return -1;
+    }
+
+    if (startIndex < 0) {
+      startIndex = matchIndex;
+    }
+
+    const gap = lastIndex < 0 ? matchIndex : matchIndex - lastIndex - 1;
+    if (gap === 0) {
+      streak += 1;
+      consecutiveBonus += 18 + Math.min(streak, 8) * 2;
+    } else {
+      streak = 0;
+      gapPenalty += Math.min(gap, 12) * 9;
+    }
+
+    const prevChar = matchIndex > 0 ? target[matchIndex - 1] : "";
+    if (matchIndex === 0 || prevChar === "/" || prevChar === "." || prevChar === "_" || prevChar === "-") {
+      boundaryBonus += 24;
+    }
+
+    lastIndex = matchIndex;
+  }
+
+  const span = lastIndex - startIndex + 1;
+  const skippedChars = span - query.length;
+  const density = query.length / span;
+  const minDensity = query.length >= 8
+    ? 0.66
+    : query.length >= 5
+      ? 0.55
+      : 0.45;
+
+  if (density < minDensity) {
+    return -1;
+  }
+  if (query.length >= 6 && skippedChars > Math.max(3, Math.floor(query.length / 2))) {
+    return -1;
+  }
+
+  return query.length * 220
+    + consecutiveBonus
+    + boundaryBonus
+    - gapPenalty
+    - startIndex * 3
+    - (target.length - query.length);
+}
+
+function getTypoToleranceLimit(queryLength) {
+  if (queryLength <= 4) return 1;
+  if (queryLength <= 8) return 2;
+  return 3;
+}
+
+function boundedDamerauLevenshtein(source, target, maxDistance) {
+  if (source === target) {
+    return 0;
+  }
+
+  const sourceLength = source.length;
+  const targetLength = target.length;
+  if (!sourceLength) {
+    return targetLength <= maxDistance ? targetLength : Number.POSITIVE_INFINITY;
+  }
+  if (!targetLength) {
+    return sourceLength <= maxDistance ? sourceLength : Number.POSITIVE_INFINITY;
+  }
+  if (Math.abs(sourceLength - targetLength) > maxDistance) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  let prevPrevRow = null;
+  let prevRow = Array.from({ length: targetLength + 1 }, (_, index) => index);
+
+  for (let sourceIndex = 1; sourceIndex <= sourceLength; sourceIndex += 1) {
+    const currentRow = [sourceIndex];
+    let rowMin = currentRow[0];
+
+    for (let targetIndex = 1; targetIndex <= targetLength; targetIndex += 1) {
+      const substitutionCost = source[sourceIndex - 1] === target[targetIndex - 1] ? 0 : 1;
+      let cell = Math.min(
+        prevRow[targetIndex] + 1,
+        currentRow[targetIndex - 1] + 1,
+        prevRow[targetIndex - 1] + substitutionCost,
+      );
+
+      if (
+        prevPrevRow
+        && sourceIndex > 1
+        && targetIndex > 1
+        && source[sourceIndex - 1] === target[targetIndex - 2]
+        && source[sourceIndex - 2] === target[targetIndex - 1]
+      ) {
+        cell = Math.min(cell, prevPrevRow[targetIndex - 2] + 1);
+      }
+
+      currentRow[targetIndex] = cell;
+      if (cell < rowMin) {
+        rowMin = cell;
+      }
+    }
+
+    if (rowMin > maxDistance) {
+      return Number.POSITIVE_INFINITY;
+    }
+
+    prevPrevRow = prevRow;
+    prevRow = currentRow;
+  }
+
+  return prevRow[targetLength] <= maxDistance ? prevRow[targetLength] : Number.POSITIVE_INFINITY;
+}
+
+function getSharedPrefixLength(left, right) {
+  const maxLength = Math.min(left.length, right.length);
+  let index = 0;
+  while (index < maxLength && left[index] === right[index]) {
+    index += 1;
+  }
+  return index;
+}
+
+function scoreTypoMatch(target, query, baseScore) {
+  if (!target || !query) {
+    return -1;
+  }
+
+  const maxDistance = getTypoToleranceLimit(query.length);
+  const distance = boundedDamerauLevenshtein(query, target, maxDistance);
+  if (!Number.isFinite(distance)) {
+    return -1;
+  }
+
+  const sharedPrefixLength = getSharedPrefixLength(query, target);
+  return baseScore
+    + (maxDistance - distance) * 320
+    + sharedPrefixLength * 18
+    - Math.abs(target.length - query.length) * 10
+    - target.length;
+}
+
+function getTypoProjectFileScore(entry, normalizedQuery) {
+  if (normalizedQuery.length < 3) {
+    return -1;
+  }
+
+  let bestScore = -1;
+
+  const lowerStemScore = scoreTypoMatch(entry.lowerStem, normalizedQuery, 6_200);
+  if (lowerStemScore >= 0) {
+    bestScore = Math.max(bestScore, lowerStemScore);
+  }
+
+  const lowerNameScore = scoreTypoMatch(entry.lowerName, normalizedQuery, 5_900);
+  if (lowerNameScore >= 0) {
+    bestScore = Math.max(bestScore, lowerNameScore);
+  }
+
+  const compactQuery = toCompactSearchKey(normalizedQuery);
+  if (compactQuery.length < 3) {
+    return bestScore;
+  }
+
+  const compactStemScore = scoreTypoMatch(entry.compactStem, compactQuery, 6_100);
+  if (compactStemScore >= 0) {
+    bestScore = Math.max(bestScore, compactStemScore);
+  }
+
+  const compactNameScore = scoreTypoMatch(entry.compactName, compactQuery, 5_800);
+  if (compactNameScore >= 0) {
+    bestScore = Math.max(bestScore, compactNameScore);
+  }
+
+  return bestScore;
+}
+
+function getFuzzyProjectFileScore(entry, normalizedQuery) {
+  if (normalizedQuery.length < 3) {
+    return -1;
+  }
+
+  let bestScore = -1;
+
+  const baseNameScore = scoreSubsequenceMatch(entry.lowerName, normalizedQuery);
+  if (baseNameScore >= 0) {
+    bestScore = Math.max(bestScore, 7_600 + baseNameScore);
+  }
+
+  const stemScore = scoreSubsequenceMatch(entry.lowerStem, normalizedQuery);
+  if (stemScore >= 0) {
+    bestScore = Math.max(bestScore, 7_300 + stemScore);
+  }
+
+  const pathScore = scoreSubsequenceMatch(entry.lowerPath, normalizedQuery);
+  if (pathScore >= 0) {
+    bestScore = Math.max(bestScore, 6_800 + pathScore);
+  }
+
+  const compactQuery = toCompactSearchKey(normalizedQuery);
+  if (compactQuery.length < 3) {
+    return bestScore;
+  }
+
+  const compactNameScore = scoreSubsequenceMatch(entry.compactName, compactQuery);
+  if (compactNameScore >= 0) {
+    bestScore = Math.max(bestScore, 7_000 + compactNameScore);
+  }
+
+  const compactStemScore = scoreSubsequenceMatch(entry.compactStem, compactQuery);
+  if (compactStemScore >= 0) {
+    bestScore = Math.max(bestScore, 6_900 + compactStemScore);
+  }
+
+  const compactPathScore = scoreSubsequenceMatch(entry.compactPath, compactQuery);
+  if (compactPathScore >= 0) {
+    bestScore = Math.max(bestScore, 6_400 + compactPathScore);
+  }
+
+  return bestScore >= 0
+    ? bestScore
+    : getTypoProjectFileScore(entry, normalizedQuery);
+}
+
 function scoreProjectFile(entry, rawQuery) {
   const normalizedQuery = normalizeProjectPath(rawQuery).toLowerCase();
   const lowerPath = entry.lowerPath;
@@ -230,7 +511,7 @@ function scoreProjectFile(entry, rawQuery) {
     return 8_000 - entry.length;
   }
 
-  return -1;
+  return getFuzzyProjectFileScore(entry, normalizedQuery);
 }
 
 function getSearchSourceEntries(entries, normalizedQuery) {
@@ -344,6 +625,35 @@ export async function readProjectFile(filePath) {
     mimeType: "application/octet-stream",
     size: stat.size,
     content: `[二进制文件: ${normalizedPath}, ${(stat.size / 1024).toFixed(1)} KB]`,
+  };
+}
+
+export async function openProjectFile(filePath) {
+  const projectRoot = WORKSPACE_ROOT;
+  const normalizedPath = normalizeProjectPath(filePath);
+  if (!normalizedPath) {
+    throw new Error("文件路径不能为空");
+  }
+
+  const fullPath = path.resolve(projectRoot, normalizedPath);
+  if (!isPathInsideProject(projectRoot, fullPath)) {
+    throw new Error("只能打开当前项目内的文件");
+  }
+
+  const stat = await fs.stat(fullPath).catch(() => null);
+  if (!stat?.isFile()) {
+    throw new Error("未找到文件");
+  }
+
+  try {
+    await execFileAsync("/usr/bin/open", ["-a", "Cursor", fullPath]);
+  } catch {
+    await execFileAsync("/usr/bin/open", [fullPath]);
+  }
+
+  return {
+    ok: true,
+    path: normalizedPath,
   };
 }
 
@@ -494,12 +804,15 @@ function buildChatAppHtml(bundle) {
             <div class="xh-cmd-palette" id="cmdPalette" hidden></div>
             <div class="xh-attachments" id="attachmentBar" hidden></div>
             <div class="xh-fake-caret" id="fakeCaret" hidden></div>
-            <textarea
+            <div
               class="xh-input"
               id="messageInput"
-              rows="1"
-              placeholder="继续给 Agent 发消息... (/ 调出命令)"
-            ></textarea>
+              contenteditable="true"
+              role="textbox"
+              aria-multiline="true"
+              spellcheck="true"
+              data-placeholder="继续给 Agent 发消息... (/ 调出命令)"
+            ></div>
             <div class="xh-input-actions">
               <button class="xh-action-btn" id="openBrowserBtn" type="button" title="在浏览器继续输入">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg>
@@ -532,6 +845,7 @@ function buildChatAppHtml(bundle) {
     </div>
   </div>
   <script>window.__XIAOHAHA_BROWSER_CHAT_URL = ${JSON.stringify(BASE_URL)};</script>
+  <script>window.__XIAOHAHA_WORKSPACE_ROOT = ${JSON.stringify(WORKSPACE_ROOT)};</script>
   <script>${escapeInlineScript(bundle)}</script>
 ${DEV_MODE ? `  <script>
     (function(){
@@ -567,6 +881,26 @@ const UPLOAD_ATTACHMENT_SCHEMA = z.object({
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "project attachment requires path" });
   }
 });
+const APP_DIAGNOSTIC_DETAIL_SCHEMA = z.record(z.string(), z.unknown()).optional();
+
+function recordIntegrationDiagnostic(diagnostics, type, detail = {}) {
+  diagnostics?.record?.(type, detail);
+}
+
+function summarizeStateForDiagnostic(state) {
+  if (!state || typeof state !== "object") {
+    return {};
+  }
+
+  return {
+    conversationId: typeof state.conversationId === "string" ? state.conversationId : "",
+    anyWaiting: Boolean(state.anyWaiting),
+    waiting: Boolean(state.waiting),
+    isCurrentView: Boolean(state.isCurrentView),
+    queueLength: Number.isFinite(state.queueLength) ? state.queueLength : 0,
+    eventCount: Array.isArray(state.events) ? state.events.length : 0,
+  };
+}
 
 function buildAttachmentPreviewLabel(attachment) {
   if (!attachment || typeof attachment !== "object") {
@@ -820,7 +1154,7 @@ function startCheckMessagesProgress(extra) {
   };
 }
 
-export function registerChatAppIntegration(mcpServer, sessionService, attachmentStore) {
+export function registerChatAppIntegration(mcpServer, sessionService, attachmentStore, diagnostics) {
   registerAppResource(
     mcpServer,
     "Xiaohaha Chat UI",
@@ -837,6 +1171,9 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
       },
     },
     async () => {
+      recordIntegrationDiagnostic(diagnostics, "chat_ui_resource_read", {
+        resourceUri: CHAT_APP_URI,
+      });
       const bundle = await loadChatAppBundle();
 
       return {
@@ -885,9 +1222,16 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
     async ({ ai_response, conversation_id }, extra) => {
       const session = sessionService.getOrCreateSession(conversation_id);
       const instanceId = extra.requestId;
-
       sessionService.bindToolInstanceToConversation(instanceId, session.conversationId);
       sessionService.bindClientSessionToConversation(extra.sessionId, session.conversationId);
+
+      recordIntegrationDiagnostic(diagnostics, "check_messages_called", {
+        mcpSessionId: extra.sessionId || "",
+        toolRequestId: String(instanceId ?? ""),
+        inputConversationId: conversation_id || "",
+        conversationId: session.conversationId,
+        hasAiResponse: Boolean(ai_response?.trim()),
+      });
 
       if (ai_response?.trim()) {
         sessionService.recordAiResponse(session, ai_response.trim());
@@ -897,6 +1241,12 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
       if (queuedMessage) {
         const queuedPreview = queuedMessage.preview || buildPreviewFromInput(queuedMessage.message, queuedMessage.attachments);
         sessionService.rememberToolPreview(session, instanceId, queuedPreview);
+        recordIntegrationDiagnostic(diagnostics, "check_messages_dequeued_immediately", {
+          conversationId: session.conversationId,
+          toolRequestId: String(instanceId ?? ""),
+          preview: queuedPreview,
+          attachmentCount: Array.isArray(queuedMessage.attachments) ? queuedMessage.attachments.length : 0,
+        });
         return await buildCheckMessagesPrompt(queuedMessage, session.conversationId, session.contextSummary, attachmentStore);
       }
 
@@ -904,6 +1254,11 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
       const stopProgress = startCheckMessagesProgress(extra);
 
       try {
+        recordIntegrationDiagnostic(diagnostics, "check_messages_wait_started", {
+          conversationId: session.conversationId,
+          toolRequestId: String(instanceId ?? ""),
+          mcpSessionId: extra.sessionId || "",
+        });
         const message = await Promise.race([
           sessionService.waitForNextMessage(session, instanceId, extra.sessionId),
           new Promise((resolve) => {
@@ -922,6 +1277,10 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         ]);
 
         if (message === WAIT_RESOLUTIONS.REQUEST_ABORTED) {
+          recordIntegrationDiagnostic(diagnostics, "check_messages_wait_aborted", {
+            conversationId: session.conversationId,
+            toolRequestId: String(instanceId ?? ""),
+          });
           return {
             isError: true,
             content: [
@@ -934,6 +1293,10 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         }
 
         if (message === WAIT_RESOLUTIONS.SESSION_CLOSED || !message) {
+          recordIntegrationDiagnostic(diagnostics, "check_messages_wait_closed", {
+            conversationId: session.conversationId,
+            toolRequestId: String(instanceId ?? ""),
+          });
           return {
             isError: true,
             content: [
@@ -945,6 +1308,12 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
           };
         }
 
+        recordIntegrationDiagnostic(diagnostics, "check_messages_wait_resolved", {
+          conversationId: session.conversationId,
+          toolRequestId: String(instanceId ?? ""),
+          preview: message.preview || "",
+          attachmentCount: Array.isArray(message.attachments) ? message.attachments.length : 0,
+        });
         return await buildCheckMessagesPrompt(message, session.conversationId, session.contextSummary, attachmentStore);
       } finally {
         stopProgress();
@@ -986,7 +1355,16 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         instanceId: instance_id,
         clientSessionId: extra.sessionId,
         aiResponseHint: route_hint,
-        allowClientSessionFallback: false,
+        allowClientSessionFallback: true,
+        bindInstance: false,
+      });
+
+      recordIntegrationDiagnostic(diagnostics, "app_state_tool_query", {
+        instanceId: instance_id || "",
+        conversationId: conversation_id || "",
+        routeHint: route_hint || "",
+        mcpSessionId: extra.sessionId || "",
+        ...summarizeStateForDiagnostic(state),
       });
 
       return {
@@ -1044,7 +1422,16 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         instanceId: instance_id,
         clientSessionId: extra.sessionId,
         aiResponseHint: route_hint,
-        allowClientSessionFallback: false,
+        allowClientSessionFallback: true,
+      });
+
+      recordIntegrationDiagnostic(diagnostics, "app_send_tool_called", {
+        instanceId: instance_id || "",
+        conversationId: conversation_id || "",
+        routeHint: route_hint || "",
+        attachmentCount: Array.isArray(attachments) ? attachments.length : 0,
+        previewMessage: preview_message || "",
+        mcpSessionId: extra.sessionId || "",
       });
 
       if (!session) {
@@ -1053,7 +1440,14 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
           instanceId: instance_id,
           clientSessionId: extra.sessionId,
           aiResponseHint: route_hint,
-          allowClientSessionFallback: false,
+          allowClientSessionFallback: true,
+          bindInstance: false,
+        });
+        recordIntegrationDiagnostic(diagnostics, "app_send_tool_failed", {
+          instanceId: instance_id || "",
+          conversationId: conversation_id || "",
+          reason: "conversation_not_found",
+          ...summarizeStateForDiagnostic(state),
         });
         return {
           isError: true,
@@ -1080,6 +1474,13 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         const state = sessionService.getChatState({
           conversationId: conversation_id,
           instanceId: instance_id,
+          bindInstance: false,
+        });
+        recordIntegrationDiagnostic(diagnostics, "app_send_tool_failed", {
+          instanceId: instance_id || "",
+          conversationId: conversation_id || "",
+          reason: "empty_message",
+          ...summarizeStateForDiagnostic(state),
         });
         return {
           isError: true,
@@ -1097,11 +1498,18 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
       }
 
       const state = sessionService.getChatState({
-        conversationId: conversation_id,
+        conversationId: session.conversationId,
         instanceId: instance_id,
         clientSessionId: extra.sessionId,
         aiResponseHint: route_hint,
-        allowClientSessionFallback: false,
+        allowClientSessionFallback: true,
+        bindInstance: false,
+      });
+
+      recordIntegrationDiagnostic(diagnostics, "app_send_tool_succeeded", {
+        instanceId: instance_id || "",
+        conversationId: session.conversationId,
+        ...summarizeStateForDiagnostic(state),
       });
 
       return {
@@ -1115,6 +1523,63 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
           ok: true,
           state,
         },
+      };
+    }
+  );
+
+  registerAppTool(
+    mcpServer,
+    "xiaohaha_log_app_event",
+    {
+      description: "Record a diagnostics event from the embedded Xiaohaha app.",
+      inputSchema: {
+        event: z.string().describe("Short diagnostics event name."),
+        detail: APP_DIAGNOSTIC_DETAIL_SCHEMA.describe("Optional structured diagnostics detail."),
+        instance_id: z
+          .string()
+          .optional()
+          .describe("Current MCP App tool instance id."),
+        conversation_id: z
+          .string()
+          .optional()
+          .describe("Logical conversation id when known."),
+      },
+      _meta: {
+        ui: {
+          visibility: ["app"],
+        },
+      },
+    },
+    async ({ event, detail, instance_id, conversation_id }, extra) => {
+      if ((event === "ui_tool_input" || event === "ui_host_context_changed") && instance_id) {
+        const session = sessionService.resolveSession({
+          conversationId: conversation_id,
+          instanceId: instance_id,
+          clientSessionId: extra.sessionId,
+          allowClientSessionFallback: true,
+        });
+        if (session) {
+          sessionService.bindAppInstanceToSession(session, instance_id);
+          recordIntegrationDiagnostic(diagnostics, "app_view_bound_from_tool_log", {
+            event,
+            instanceId: instance_id,
+            conversationId: session.conversationId,
+            mcpSessionId: extra.sessionId || "",
+          });
+        }
+      }
+
+      recordIntegrationDiagnostic(diagnostics, "app_tool_event", {
+        event,
+        detail: detail || {},
+        instanceId: instance_id || "",
+        conversationId: conversation_id || "",
+        mcpSessionId: extra.sessionId || "",
+      });
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+        structuredContent: { ok: true },
       };
     }
   );
@@ -1217,6 +1682,38 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : "读取文件失败";
+        return {
+          isError: true,
+          content: [{ type: "text", text: message }],
+          structuredContent: { ok: false, error: message },
+        };
+      }
+    }
+  );
+
+  registerAppTool(
+    mcpServer,
+    "xiaohaha_open_project_file",
+    {
+      description: "Open a selected project file in the editor for the embedded Xiaohaha chat mention chip.",
+      inputSchema: {
+        file_path: z.string().describe("Project-relative file path selected from the inline mention chip."),
+      },
+      _meta: {
+        ui: {
+          visibility: ["app"],
+        },
+      },
+    },
+    async ({ file_path }) => {
+      try {
+        const result = await openProjectFile(file_path);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result) }],
+          structuredContent: result,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "打开文件失败";
         return {
           isError: true,
           content: [{ type: "text", text: message }],
