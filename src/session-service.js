@@ -39,6 +39,76 @@ function buildPreviewText(text, maxLength = 48) {
     : normalized;
 }
 
+function normalizeAttachmentRef(item) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+
+  const store = item.store === "upload" || item.store === "project" ? item.store : "";
+  const type = item.type === "image" || item.type === "file" || item.type === "snippet" ? item.type : "";
+  if (!store || !type) {
+    return null;
+  }
+
+  const ref = { store, type };
+  if (store === "upload") {
+    const id = typeof item.id === "string" ? item.id.trim() : "";
+    if (!id) {
+      return null;
+    }
+    ref.id = id;
+  } else {
+    const filePath = typeof item.path === "string" ? item.path.trim() : "";
+    if (!filePath) {
+      return null;
+    }
+    ref.path = filePath;
+  }
+
+  if (typeof item.name === "string" && item.name.trim()) {
+    ref.name = item.name.trim();
+  }
+  if (typeof item.mimeType === "string" && item.mimeType.trim()) {
+    ref.mimeType = item.mimeType.trim();
+  }
+  if (typeof item.path === "string" && item.path.trim()) {
+    ref.path = item.path.trim();
+  }
+  if (typeof item.lineRef === "string" && item.lineRef.trim()) {
+    ref.lineRef = item.lineRef.trim();
+  }
+  if (Number.isFinite(item.size) && item.size >= 0) {
+    ref.size = Math.floor(item.size);
+  }
+
+  return ref;
+}
+
+function normalizeQueuedMessageEntry(item) {
+  if (typeof item === "string") {
+    const message = item.trim();
+    return message ? { message, preview: "", attachments: [] } : null;
+  }
+
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+
+  const message = typeof item.message === "string" ? item.message.trim() : "";
+  const attachments = Array.isArray(item.attachments)
+    ? item.attachments.map((attachment) => normalizeAttachmentRef(attachment)).filter(Boolean)
+    : [];
+  if (!message && attachments.length === 0) {
+    return null;
+  }
+
+  return {
+    message,
+    preview: typeof item.preview === "string" ? item.preview.trim() : "",
+    attachments,
+  };
+}
+
 export const WAIT_RESOLUTIONS = Object.freeze({
   SESSION_CLOSED: Symbol("session_closed"),
   REQUEST_ABORTED: Symbol("request_aborted"),
@@ -75,8 +145,8 @@ function createSql(db) {
     `),
     deleteMessageQueue: db.prepare(`DELETE FROM message_queue WHERE conversation_id = ?`),
     insertMessageQueue: db.prepare(`
-      INSERT INTO message_queue (conversation_id, queue_index, message)
-      VALUES (?, ?, ?)
+      INSERT INTO message_queue (conversation_id, queue_index, message, preview, attachments_json)
+      VALUES (?, ?, ?, ?, ?)
     `),
     upsertAiResponse: db.prepare(`
       INSERT INTO ai_responses (conversation_id, response_id, text, time)
@@ -111,7 +181,7 @@ function createSql(db) {
       ORDER BY updated_at ASC
     `),
     selectMessageQueue: db.prepare(`
-      SELECT message
+      SELECT message, preview, attachments_json
       FROM message_queue
       WHERE conversation_id = ?
       ORDER BY queue_index ASC
@@ -163,7 +233,7 @@ function deserializeLegacySession(rawSession) {
 
   const session = createSessionState(conversationId);
   session.messageQueue = Array.isArray(rawSession?.messageQueue)
-    ? rawSession.messageQueue.filter((item) => typeof item === "string")
+    ? rawSession.messageQueue.map((item) => normalizeQueuedMessageEntry(item)).filter(Boolean)
     : [];
   session.aiResponses = Array.isArray(rawSession?.aiResponses)
     ? rawSession.aiResponses.filter(
@@ -224,6 +294,8 @@ export class SessionService {
         conversation_id TEXT NOT NULL,
         queue_index INTEGER NOT NULL,
         message TEXT NOT NULL,
+        preview TEXT NOT NULL DEFAULT '',
+        attachments_json TEXT NOT NULL DEFAULT '[]',
         PRIMARY KEY (conversation_id, queue_index)
       );
 
@@ -257,6 +329,13 @@ export class SessionService {
       );
     `);
 
+    try {
+      this.db.exec(`ALTER TABLE message_queue ADD COLUMN preview TEXT NOT NULL DEFAULT ''`);
+    } catch {}
+    try {
+      this.db.exec(`ALTER TABLE message_queue ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'`);
+    } catch {}
+
     this.sql = createSql(this.db);
   }
 
@@ -272,8 +351,14 @@ export class SessionService {
   persistMessageQueue(session) {
     runInTransaction(this.db, () => {
       this.sql.deleteMessageQueue.run(session.conversationId);
-      session.messageQueue.forEach((message, index) => {
-        this.sql.insertMessageQueue.run(session.conversationId, index, message);
+      session.messageQueue.forEach((entry, index) => {
+        this.sql.insertMessageQueue.run(
+          session.conversationId,
+          index,
+          entry.message,
+          entry.preview || "",
+          JSON.stringify(entry.attachments || [])
+        );
       });
       this.persistSessionMetadata(session);
     });
@@ -307,7 +392,18 @@ export class SessionService {
       session.updatedAt = row.updated_at;
       session.messageQueue = this.sql.selectMessageQueue
         .all(session.conversationId)
-        .map((item) => item.message);
+        .map((item) => normalizeQueuedMessageEntry({
+          message: item.message,
+          preview: item.preview,
+          attachments: (() => {
+            try {
+              return JSON.parse(item.attachments_json || "[]");
+            } catch {
+              return [];
+            }
+          })(),
+        }))
+        .filter(Boolean);
       session.aiResponses = this.sql.selectAiResponses.all(session.conversationId).map((item) => ({
         id: item.response_id,
         text: item.text,
@@ -334,8 +430,14 @@ export class SessionService {
     runInTransaction(this.db, () => {
       this.persistSessionMetadata(session);
       this.sql.deleteMessageQueue.run(session.conversationId);
-      session.messageQueue.forEach((message, index) => {
-        this.sql.insertMessageQueue.run(session.conversationId, index, message);
+      session.messageQueue.forEach((entry, index) => {
+        this.sql.insertMessageQueue.run(
+          session.conversationId,
+          index,
+          entry.message,
+          entry.preview || "",
+          JSON.stringify(entry.attachments || [])
+        );
       });
       session.chatEvents.forEach((event) => {
         this.sql.upsertChatEvent.run(session.conversationId, event.id, event.role, event.text, event.time);
@@ -600,15 +702,22 @@ export class SessionService {
       return null;
     }
 
-    const message = session.messageQueue.shift();
+    const entry = normalizeQueuedMessageEntry(session.messageQueue.shift());
     this.touchSession(session);
     this.persistMessageQueue(session);
-    return message;
+    return entry;
   }
 
   enqueueUserMessage(session, rawMessage, previewText) {
-    const message = rawMessage?.trim();
-    if (!session || !message) {
+    return this.enqueueUserMessageWithAttachments(session, rawMessage, previewText, []);
+  }
+
+  enqueueUserMessageWithAttachments(session, rawMessage, previewText, rawAttachments = []) {
+    const message = typeof rawMessage === "string" ? rawMessage.trim() : "";
+    const attachments = Array.isArray(rawAttachments)
+      ? rawAttachments.map((attachment) => normalizeAttachmentRef(attachment)).filter(Boolean)
+      : [];
+    if (!session || (!message && attachments.length === 0)) {
       return false;
     }
 
@@ -623,9 +732,9 @@ export class SessionService {
       const waitingState = this.takeWaitingState(session);
       const activeInstanceId = waitingState?.activeInstanceId || null;
       this.rememberToolPreviewForCurrentView(session, activeInstanceId, preview);
-      waitingState?.resolve(message);
+      waitingState?.resolve({ message, preview, attachments });
     } else {
-      session.messageQueue.push(message);
+      session.messageQueue.push({ message, preview, attachments });
       this.touchSession(session);
       this.persistMessageQueue(session);
     }

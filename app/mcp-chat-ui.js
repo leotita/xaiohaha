@@ -8,9 +8,10 @@ import {
 
 import { STYLES } from "./lib/styles.js";
 import { POLL_INTERVAL_MS, INPUT_MIN_HEIGHT_PX, INPUT_MAX_HEIGHT_PX, SLASH_COMMANDS } from "./lib/constants.js";
-import { escapeHtml } from "./lib/utils.js";
+import { escapeHtml, readAsDataUrl } from "./lib/utils.js";
 import { AttachmentManager } from "./lib/attachment-manager.js";
 import { CommandPalette } from "./lib/command-palette.js";
+import { FileMentionPalette } from "./lib/file-mention-palette.js";
 
 /* ── Inject styles ── */
 const styleEl = document.createElement("style");
@@ -22,6 +23,8 @@ const BROWSER_CHAT_BASE_URL = typeof window.__XIAOHAHA_BROWSER_CHAT_URL === "str
   : "";
 const LOCAL_HTTP_TIMEOUT_MS = 4000;
 const LOCAL_SEND_TIMEOUT_MS = 8000;
+const LOCAL_UPLOAD_TIMEOUT_MS = 20000;
+const FILE_MENTION_SEARCH_DEBOUNCE_MS = 60;
 
 /* ═══════════════════════════════════════════════════
    DOM Setup
@@ -30,41 +33,59 @@ const LOCAL_SEND_TIMEOUT_MS = 8000;
 const root = document.getElementById("app");
 if (!root) throw new Error("Missing #app mount element.");
 
-const needsFullDom = !root.querySelector("#inputShell") || !root.querySelector("#cmdPalette") || root.querySelector("#cmdPalette")?.closest("#inputShell");
+const needsFullDom = !root.querySelector("#inputShell")
+  || !root.querySelector("#cmdPalette")
+  || !root.querySelector("#fileMentionPalette")
+  || !root.querySelector("#composerLayer")
+  || !root.querySelector("#imageLightbox")
+  || !root.querySelector("#cmdPalette")?.closest("#inputShell")
+  || !root.querySelector("#fileMentionPalette")?.closest("#inputShell");
 if (needsFullDom) {
   root.innerHTML = `
     <div class="xh-root">
       <div class="xh-preview" id="sentPreview" hidden></div>
-      <div class="xh-cmd-palette" id="cmdPalette" hidden></div>
-      <form class="xh-form" id="composerForm">
-        <div class="xh-input-shell" id="inputShell">
-          <div class="xh-attachments" id="attachmentBar" hidden></div>
-          <div class="xh-fake-caret" id="fakeCaret" hidden></div>
-          <textarea
-            class="xh-input"
-            id="messageInput"
-            rows="1"
-            placeholder="继续给 Agent 发消息... (/ 调出命令)"
-          ></textarea>
-          <div class="xh-input-actions">
-            <button class="xh-action-btn" id="openBrowserBtn" type="button" title="在浏览器继续输入">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg>
-            </button>
-            <button class="xh-action-btn" id="attachFileBtn" type="button" title="添加文件">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
-            </button>
-            <button class="xh-action-btn" id="attachImageBtn" type="button" title="添加图片">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-            </button>
+      <div class="xh-composer-layer" id="composerLayer">
+        <form class="xh-form" id="composerForm">
+          <div class="xh-input-shell" id="inputShell">
+            <div class="xh-cmd-palette xh-file-palette" id="fileMentionPalette" hidden></div>
+            <div class="xh-cmd-palette" id="cmdPalette" hidden></div>
+            <div class="xh-attachments" id="attachmentBar" hidden></div>
+            <div class="xh-fake-caret" id="fakeCaret" hidden></div>
+            <textarea
+              class="xh-input"
+              id="messageInput"
+              rows="1"
+              placeholder="继续给 Agent 发消息... (/ 调出命令)"
+            ></textarea>
+            <div class="xh-input-actions">
+              <button class="xh-action-btn" id="openBrowserBtn" type="button" title="在浏览器继续输入">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg>
+              </button>
+              <button class="xh-action-btn" id="attachFileBtn" type="button" title="添加文件">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+              </button>
+              <button class="xh-action-btn" id="attachImageBtn" type="button" title="添加图片">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              </button>
+            </div>
+            <div class="xh-drag-overlay" id="dragOverlay" hidden>
+              <div class="xh-drag-label">释放以添加文件</div>
+            </div>
           </div>
-          <div class="xh-drag-overlay" id="dragOverlay" hidden>
-            <div class="xh-drag-label">释放以添加文件</div>
-          </div>
-        </div>
-      </form>
+        </form>
+      </div>
       <input type="file" id="fileInput" multiple hidden>
       <input type="file" id="imageInput" accept="image/*" multiple hidden>
       <div class="xh-error" id="errorBanner" hidden></div>
+      <div class="xh-lightbox" id="imageLightbox" hidden>
+        <div class="xh-lightbox-panel">
+          <button class="xh-lightbox-close" id="imageLightboxClose" type="button" aria-label="关闭预览">×</button>
+          <div class="xh-lightbox-frame">
+            <img class="xh-lightbox-img" id="imageLightboxImg" alt="">
+          </div>
+          <div class="xh-lightbox-caption" id="imageLightboxCaption"></div>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -82,12 +103,18 @@ const attachImageBtn = document.getElementById("attachImageBtn");
 const fileInput = document.getElementById("fileInput");
 const imageInput = document.getElementById("imageInput");
 const dragOverlay = document.getElementById("dragOverlay");
+const fileMentionPaletteEl = document.getElementById("fileMentionPalette");
+const imageLightbox = document.getElementById("imageLightbox");
+const imageLightboxFrame = document.getElementById("imageLightbox")?.querySelector(".xh-lightbox-frame");
+const imageLightboxImg = document.getElementById("imageLightboxImg");
+const imageLightboxCaption = document.getElementById("imageLightboxCaption");
+const imageLightboxClose = document.getElementById("imageLightboxClose");
 
 /* ═══════════════════════════════════════════════════
    MCP App + State
    ═══════════════════════════════════════════════════ */
 
-const app = new App({ name: "xiaohaha-chat-ui", version: "1.0.3" }, {}, { autoResize: true });
+const app = new App({ name: "xiaohaha-chat-ui", version: "1.0.7" }, {}, { autoResize: true });
 
 const uiState = {
   connected: false,
@@ -107,6 +134,8 @@ const uiState = {
 let pollTimer = null;
 let isComposing = false;
 let dragCounter = 0;
+let isImageLightboxZoomed = false;
+let activeImageLightboxAttachment = null;
 
 /* ── Managers ── */
 
@@ -115,9 +144,21 @@ attachments.onError = (msg) => {
   uiState.error = msg;
   render();
 };
+attachments.onPreview = openImageLightbox;
 
 const cmdPalette = new CommandPalette(document.getElementById("cmdPalette"));
+cmdPalette.setAnchorEl(inputShell);
 cmdPalette.onExecute = executeCommand;
+
+const fileMentionPalette = new FileMentionPalette(fileMentionPaletteEl);
+fileMentionPalette.setAnchorEl(inputShell);
+fileMentionPalette.onSelect = (item) => {
+  void attachMentionedProjectFile(item);
+};
+
+let mentionSearchTimer = null;
+let mentionSearchSeq = 0;
+let activeMention = null;
 
 /* ═══════════════════════════════════════════════════
    Helpers
@@ -144,6 +185,279 @@ function updateFakeCaret() {
 
   fakeCaret.hidden = !showFakeCaret;
   inputShell.classList.toggle("xh-pseudo-focus", showFakeCaret);
+}
+
+function isImageLightboxOpen() {
+  return !imageLightbox.hidden;
+}
+
+function setImageLightboxZoomed(nextValue) {
+  isImageLightboxZoomed = Boolean(nextValue);
+  imageLightboxFrame.classList.toggle("xh-lightbox-frame--zoomed", isImageLightboxZoomed);
+  applyImageLightboxLayout();
+}
+
+function getImageLightboxViewportSize() {
+  const panelWidth = Math.min(window.innerWidth * 0.92, 920);
+  return {
+    maxWidth: Math.max(160, Math.floor(panelWidth - 28)),
+    maxHeight: Math.max(160, Math.floor(window.innerHeight - 140)),
+  };
+}
+
+function setLightboxImageStyle(name, value) {
+  imageLightboxImg.style.setProperty(name, value, "important");
+}
+
+function clearLightboxImageStyle(name) {
+  imageLightboxImg.style.removeProperty(name);
+}
+
+function applyImageLightboxLayout() {
+  if (imageLightbox.hidden) {
+    return;
+  }
+
+  const naturalWidth = Number(activeImageLightboxAttachment?.pixelWidth) || imageLightboxImg.naturalWidth || 0;
+  const naturalHeight = Number(activeImageLightboxAttachment?.pixelHeight) || imageLightboxImg.naturalHeight || 0;
+  if (!naturalWidth || !naturalHeight) {
+    return;
+  }
+
+  activeImageLightboxAttachment = {
+    ...(activeImageLightboxAttachment || {}),
+    pixelWidth: naturalWidth,
+    pixelHeight: naturalHeight,
+  };
+
+  let displayWidth = naturalWidth;
+  let displayHeight = naturalHeight;
+
+  if (!isImageLightboxZoomed) {
+    const { maxWidth, maxHeight } = getImageLightboxViewportSize();
+    const fitScale = Math.min(maxWidth / naturalWidth, maxHeight / naturalHeight);
+    const safeScale = Number.isFinite(fitScale) && fitScale > 0 ? fitScale : 1;
+    displayWidth = Math.max(1, Math.round(naturalWidth * safeScale));
+    displayHeight = Math.max(1, Math.round(naturalHeight * safeScale));
+  }
+
+  setLightboxImageStyle("width", `${displayWidth}px`);
+  setLightboxImageStyle("height", `${displayHeight}px`);
+  setLightboxImageStyle("max-width", "none");
+  setLightboxImageStyle("max-height", "none");
+  setLightboxImageStyle("min-width", "0");
+  setLightboxImageStyle("min-height", "0");
+  setLightboxImageStyle("object-fit", "fill");
+}
+
+function openImageLightbox(att) {
+  const src = typeof att?.content === "string" ? att.content : "";
+  if (!src) {
+    return;
+  }
+
+  activeImageLightboxAttachment = {
+    pixelWidth: Number(att?.pixelWidth) || 0,
+    pixelHeight: Number(att?.pixelHeight) || 0,
+  };
+  setImageLightboxZoomed(false);
+  imageLightboxImg.src = src;
+  imageLightboxImg.alt = att?.name || "image preview";
+  imageLightboxCaption.textContent = `${att?.filePath || att?.name || ""}${att?.name || att?.filePath ? " · 点击图片切换缩放" : "点击图片切换缩放"}`;
+  imageLightbox.hidden = false;
+  applyImageLightboxLayout();
+}
+
+function closeImageLightbox() {
+  if (imageLightbox.hidden) {
+    return;
+  }
+
+  imageLightbox.hidden = true;
+  setImageLightboxZoomed(false);
+  imageLightboxFrame.scrollTop = 0;
+  imageLightboxFrame.scrollLeft = 0;
+  activeImageLightboxAttachment = null;
+  imageLightboxImg.removeAttribute("src");
+  imageLightboxImg.alt = "";
+  imageLightboxCaption.textContent = "";
+  clearLightboxImageStyle("width");
+  clearLightboxImageStyle("height");
+  clearLightboxImageStyle("max-width");
+  clearLightboxImageStyle("max-height");
+  clearLightboxImageStyle("min-width");
+  clearLightboxImageStyle("min-height");
+  clearLightboxImageStyle("object-fit");
+}
+
+function clearMentionSearchTimer() {
+  if (mentionSearchTimer) {
+    window.clearTimeout(mentionSearchTimer);
+    mentionSearchTimer = null;
+  }
+}
+
+function hideFileMentionPalette() {
+  clearMentionSearchTimer();
+  activeMention = null;
+  fileMentionPalette.hide();
+}
+
+function getActiveMentionCandidate() {
+  if (messageInput.selectionStart !== messageInput.selectionEnd) return null;
+
+  const caretPos = messageInput.selectionStart ?? messageInput.value.length;
+  const beforeCaret = messageInput.value.slice(0, caretPos);
+  const atIndex = beforeCaret.lastIndexOf("@");
+  if (atIndex < 0) return null;
+
+  const previousChar = atIndex === 0 ? "" : beforeCaret[atIndex - 1];
+  if (previousChar && /[A-Za-z0-9_./\\%+-]/.test(previousChar)) return null;
+
+  const query = beforeCaret.slice(atIndex + 1);
+  if (/\s/.test(query)) return null;
+
+  return {
+    query,
+    tokenStart: atIndex,
+    tokenEnd: caretPos,
+  };
+}
+
+function applyInputValue(nextValue, caretPos) {
+  messageInput.value = nextValue;
+  autoResizeInput(true);
+  messageInput.focus();
+  messageInput.setSelectionRange(caretPos, caretPos);
+  updateFakeCaret();
+}
+
+function removeMentionToken(text, mention) {
+  const before = text.slice(0, mention.tokenStart);
+  const after = text.slice(mention.tokenEnd);
+  let nextText = before + after;
+  let caretPos = before.length;
+
+  const needsJoinSpace = before && after
+    && !/\s$/.test(before)
+    && !/^\s/.test(after);
+
+  if (needsJoinSpace) {
+    nextText = `${before} ${after}`;
+    caretPos = before.length + 1;
+  }
+  if (before.endsWith(" ") && after.startsWith(" ")) {
+    nextText = before + after.slice(1);
+  }
+  return {
+    text: nextText,
+    caretPos,
+  };
+}
+
+async function searchProjectFilesForMention(mention) {
+  const currentSeq = ++mentionSearchSeq;
+  activeMention = mention;
+  cmdPalette.hide();
+  fileMentionPalette.showLoading(mention.query);
+
+  clearMentionSearchTimer();
+  mentionSearchTimer = window.setTimeout(async () => {
+    try {
+      let items = [];
+      try {
+        const payload = await callLocalJson("/app/project-files", {
+          params: {
+            query: mention.query,
+            limit: 20,
+          },
+        });
+        items = Array.isArray(payload?.items) ? payload.items : [];
+      } catch {
+        const result = await app.callServerTool({
+          name: "xiaohaha_search_project_files",
+          arguments: {
+            query: mention.query,
+            limit: 20,
+          },
+        }, {
+          timeout: LOCAL_HTTP_TIMEOUT_MS,
+        });
+        items = Array.isArray(result?.structuredContent?.items)
+          ? result.structuredContent.items
+          : [];
+      }
+
+      if (currentSeq !== mentionSearchSeq) return;
+
+      fileMentionPalette.showItems(items, mention.query);
+    } catch (error) {
+      if (currentSeq !== mentionSearchSeq) return;
+      fileMentionPalette.hide();
+      uiState.error = error instanceof Error ? error.message : "搜索项目文件失败";
+      render();
+    }
+  }, mention.query ? FILE_MENTION_SEARCH_DEBOUNCE_MS : 0);
+}
+
+function refreshInlinePalettes() {
+  const mention = getActiveMentionCandidate();
+  if (mention) {
+    void searchProjectFilesForMention(mention);
+    return;
+  }
+
+  mentionSearchSeq++;
+  hideFileMentionPalette();
+  cmdPalette.handleInputChange(messageInput.value);
+}
+
+async function attachMentionedProjectFile(item) {
+  const mention = activeMention;
+  mentionSearchSeq++;
+  hideFileMentionPalette();
+  if (!item?.path || !mention) return;
+
+  try {
+    let file = null;
+    try {
+      const payload = await callLocalJson("/app/project-file", {
+        params: {
+          path: item.path,
+        },
+        timeoutMs: LOCAL_SEND_TIMEOUT_MS,
+      });
+      if (!payload?.ok) {
+        throw new Error(payload?.error || "读取文件失败");
+      }
+      file = payload;
+    } catch {
+      const result = await app.callServerTool({
+        name: "xiaohaha_read_project_file",
+        arguments: {
+          file_path: item.path,
+        },
+      }, {
+        timeout: LOCAL_SEND_TIMEOUT_MS,
+      });
+
+      file = result?.structuredContent;
+      if (result?.isError || !file?.ok) {
+        throw new Error(file?.error || "读取文件失败");
+      }
+    }
+
+    attachments.addProjectFile(file);
+
+    const nextInput = removeMentionToken(messageInput.value, mention);
+    applyInputValue(nextInput.text, nextInput.caretPos);
+    uiState.error = "";
+    render();
+  } catch (error) {
+    uiState.error = error instanceof Error ? error.message : "读取文件失败";
+    render();
+    messageInput.focus();
+  }
 }
 
 function buildLocalUrl(pathname, params) {
@@ -202,6 +516,145 @@ async function callLocalJson(pathname, { method = "GET", params, body, timeoutMs
   } finally {
     window.clearTimeout(timeoutId);
   }
+}
+
+async function uploadLocalAttachment({ type, name, mimeType, size, path, lineRef, encoding, body }) {
+  const url = buildLocalUrl("/app/attachments", {
+    type,
+    name: name || undefined,
+    mimeType: mimeType || undefined,
+    size: Number.isFinite(size) ? size : undefined,
+    path: path || undefined,
+    lineRef: lineRef || undefined,
+    encoding: encoding || undefined,
+  });
+  if (!url) {
+    throw new Error("本地附件服务不可用");
+  }
+
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), LOCAL_UPLOAD_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url.toString(), {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=UTF-8" },
+      body,
+      signal: controller.signal,
+    });
+
+    let payload = {};
+    try {
+      payload = await response.json();
+    } catch {
+      payload = {};
+    }
+
+    if (!response.ok || payload?.ok === false || !payload?.attachment) {
+      const errorMessage = typeof payload?.error === "string" && payload.error.trim()
+        ? payload.error.trim()
+        : `HTTP ${response.status}`;
+      throw new Error(errorMessage);
+    }
+
+    return payload.attachment;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error("附件上传超时");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+async function readClipboardImageFromLocalService() {
+  const payload = await callLocalJson("/app/clipboard-image", {
+    timeoutMs: LOCAL_SEND_TIMEOUT_MS,
+  });
+  const image = payload?.image;
+  if (!image?.ok || typeof image?.base64 !== "string") {
+    throw new Error("剪贴板图片不可用");
+  }
+  return {
+    type: "image",
+    name: "clipboard.png",
+    mimeType: typeof image.mimeType === "string" ? image.mimeType : "image/png",
+    size: Number(image.byteLength) || 0,
+    pixelWidth: Number(image.pixelWidth) || 0,
+    pixelHeight: Number(image.pixelHeight) || 0,
+    previewSource: "clipboard-service",
+    content: `data:${typeof image.mimeType === "string" ? image.mimeType : "image/png"};base64,${image.base64}`,
+  };
+}
+
+function readImageDimensions(dataUrl) {
+  return new Promise((resolve) => {
+    const probe = new Image();
+    probe.onload = () => {
+      resolve({
+        pixelWidth: probe.naturalWidth || 0,
+        pixelHeight: probe.naturalHeight || 0,
+      });
+    };
+    probe.onerror = () => {
+      resolve({
+        pixelWidth: 0,
+        pixelHeight: 0,
+      });
+    };
+    probe.src = dataUrl;
+  });
+}
+
+async function buildImageAttachmentFromFile(file, previewSource) {
+  const content = await readAsDataUrl(file);
+  const { pixelWidth, pixelHeight } = await readImageDimensions(content);
+  return {
+    type: "image",
+    name: file.name || "image.png",
+    mimeType: file.type || "image/png",
+    size: Number(file.size) || 0,
+    pixelWidth,
+    pixelHeight,
+    previewSource,
+    content,
+  };
+}
+
+function getImageAttachmentArea(att) {
+  const width = Number(att?.pixelWidth) || 0;
+  const height = Number(att?.pixelHeight) || 0;
+  return width * height;
+}
+
+function choosePreferredImageAttachment(primaryAttachment, fallbackAttachment) {
+  if (!fallbackAttachment?.content) {
+    return primaryAttachment;
+  }
+
+  const primaryArea = getImageAttachmentArea(primaryAttachment);
+  const fallbackArea = getImageAttachmentArea(fallbackAttachment);
+  if (fallbackArea > primaryArea * 1.08) {
+    return {
+      ...fallbackAttachment,
+      name: primaryAttachment?.name || fallbackAttachment.name,
+    };
+  }
+  if (primaryArea > fallbackArea * 1.08) {
+    return primaryAttachment;
+  }
+
+  const primarySize = Number(primaryAttachment?.size) || 0;
+  const fallbackSize = Number(fallbackAttachment?.size) || 0;
+  if (fallbackSize > primarySize * 1.2) {
+    return {
+      ...fallbackAttachment,
+      name: primaryAttachment?.name || fallbackAttachment.name,
+    };
+  }
+
+  return primaryAttachment;
 }
 
 async function openBrowserChat() {
@@ -287,12 +740,10 @@ function extractPromptStateFromToolResult(result) {
     ? result.content.filter((item) => item?.type === "text" && typeof item.text === "string")
     : [];
   const combinedText = textBlocks.map((item) => item.text).join("\n");
-  if (!combinedText) return { conversationId: "", previewMessage: "" };
+  if (!combinedText) return { conversationId: "" };
   const conversationMatch = combinedText.match(/当前会话 conversation_id:\s*(.+)/);
-  const previewMatch = combinedText.match(/用户发来新消息:\s*([\s\S]*?)\n\n请根据上述消息继续工作/);
   return {
     conversationId: conversationMatch?.[1]?.trim() || "",
-    previewMessage: previewMatch?.[1]?.trim() || "",
   };
 }
 
@@ -319,12 +770,14 @@ async function refreshStateFromServerTool() {
   return extractState(result);
 }
 
-async function sendAppMessageViaLocalHttp(message) {
+async function sendAppMessageViaLocalHttp(message, previewMessage, attachmentsList) {
   const payload = await callLocalJson("/send", {
     method: "POST",
     timeoutMs: LOCAL_SEND_TIMEOUT_MS,
     body: {
       message,
+      previewMessage: previewMessage || undefined,
+      attachments: attachmentsList || undefined,
       instanceId: uiState.instanceId || undefined,
       conversationId: uiState.conversationId || undefined,
     },
@@ -332,11 +785,13 @@ async function sendAppMessageViaLocalHttp(message) {
   return normalizeState(payload?.state);
 }
 
-async function sendAppMessageViaServerTool(message) {
+async function sendAppMessageViaServerTool(message, previewMessage, attachmentsList) {
   const result = await app.callServerTool({
     name: "xiaohaha_send_app_message",
     arguments: {
       message,
+      preview_message: previewMessage || undefined,
+      attachments: attachmentsList || undefined,
       instance_id: uiState.instanceId || undefined,
       conversation_id: uiState.conversationId || undefined,
     },
@@ -406,6 +861,8 @@ async function refreshState() {
    ═══════════════════════════════════════════════════ */
 
 function executeCommand(cmdId) {
+  mentionSearchSeq++;
+  hideFileMentionPalette();
   const matchedCmd = SLASH_COMMANDS.find((c) => c.id === cmdId)
     || { id: cmdId, hostCommand: null };
 
@@ -456,11 +913,12 @@ function executeCommand(cmdId) {
    ═══════════════════════════════════════════════════ */
 
 async function sendMessage() {
+  mentionSearchSeq++;
+  hideFileMentionPalette();
   const rawText = messageInput.value.trim();
   if (!rawText && attachments.length === 0) return;
   if (uiState.sending) return;
 
-  const fullMessage = attachments.buildFullMessage(rawText);
   const previewText = attachments.buildPreviewText(rawText);
 
   uiState.sending = true;
@@ -475,7 +933,18 @@ async function sendMessage() {
   render();
 
   try {
-    const nextState = await sendAppMessageViaLocalHttp(fullMessage).catch(() => sendAppMessageViaServerTool(fullMessage));
+    let nextState = null;
+
+    try {
+      const attachmentRefs = await attachments.prepareAttachmentRefs(uploadLocalAttachment);
+      nextState = await sendAppMessageViaLocalHttp(rawText, previewText, attachmentRefs)
+        .catch(() => sendAppMessageViaServerTool(rawText, previewText, attachmentRefs));
+    } catch {
+      const legacyMessage = attachments.buildFullMessage(rawText);
+      nextState = await sendAppMessageViaLocalHttp(legacyMessage, previewText)
+        .catch(() => sendAppMessageViaServerTool(legacyMessage, previewText));
+    }
+
     if (nextState) {
       uiState.conversationId = nextState.conversationId || uiState.conversationId;
       uiState.anyWaiting = nextState.anyWaiting;
@@ -525,6 +994,31 @@ composerForm.addEventListener("submit", (e) => {
 messageInput.addEventListener("keydown", (e) => {
   if (e.isComposing || isComposing || e.keyCode === 229) return;
 
+  if (e.key === "Escape" && isImageLightboxOpen()) {
+    e.preventDefault();
+    closeImageLightbox();
+    return;
+  }
+
+  if (fileMentionPalette.visible) {
+    if (e.key === "ArrowDown") { e.preventDefault(); fileMentionPalette.moveSelection(1); return; }
+    if (e.key === "ArrowUp")   { e.preventDefault(); fileMentionPalette.moveSelection(-1); return; }
+    if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      const item = fileMentionPalette.getSelectedItem();
+      if (item) {
+        void attachMentionedProjectFile(item);
+      }
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      mentionSearchSeq++;
+      hideFileMentionPalette();
+      return;
+    }
+  }
+
   if (cmdPalette.visible) {
     if (e.key === "ArrowDown") { e.preventDefault(); cmdPalette.moveSelection(1); return; }
     if (e.key === "ArrowUp")   { e.preventDefault(); cmdPalette.moveSelection(-1); return; }
@@ -555,12 +1049,61 @@ messageInput.addEventListener("keydown", (e) => {
   }
 });
 
+imageLightboxClose.addEventListener("click", () => {
+  closeImageLightbox();
+});
+
+imageLightbox.addEventListener("click", (e) => {
+  if (e.target === imageLightbox) {
+    closeImageLightbox();
+  }
+});
+
+imageLightboxImg.addEventListener("click", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  setImageLightboxZoomed(!isImageLightboxZoomed);
+});
+
+imageLightboxImg.addEventListener("load", () => {
+  applyImageLightboxLayout();
+});
+
+window.addEventListener("resize", () => {
+  if (isImageLightboxOpen()) {
+    applyImageLightboxLayout();
+  }
+});
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && isImageLightboxOpen()) {
+    e.preventDefault();
+    closeImageLightbox();
+  }
+});
+
 messageInput.addEventListener("compositionstart", () => { isComposing = true; });
-messageInput.addEventListener("compositionend", () => { isComposing = false; autoResizeInput(true); });
+messageInput.addEventListener("compositionend", () => {
+  isComposing = false;
+  autoResizeInput(true);
+  refreshInlinePalettes();
+});
 messageInput.addEventListener("input", () => {
   autoResizeInput();
-  cmdPalette.handleInputChange(messageInput.value);
+  refreshInlinePalettes();
   updateFakeCaret();
+});
+messageInput.addEventListener("click", () => { refreshInlinePalettes(); });
+messageInput.addEventListener("keyup", (e) => {
+  if (fileMentionPalette.visible && ["ArrowUp", "ArrowDown"].includes(e.key)) {
+    return;
+  }
+  if (cmdPalette.visible && ["ArrowUp", "ArrowDown"].includes(e.key)) {
+    return;
+  }
+  if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+    refreshInlinePalettes();
+  }
 });
 messageInput.addEventListener("focus", () => { updateFakeCaret(); });
 messageInput.addEventListener("blur", () => { updateFakeCaret(); });
@@ -570,14 +1113,63 @@ messageInput.addEventListener("paste", async (e) => {
   if (!cd) return;
 
   const items = cd.items ? [...cd.items] : [];
-
+  const pastedFiles = cd.files ? [...cd.files].filter(Boolean) : [];
+  const pastedImageFiles = pastedFiles.filter((file) => file.type.startsWith("image/"));
   const imageItems = items.filter((item) => item.type.startsWith("image/"));
-  if (imageItems.length > 0) {
+
+  if (pastedImageFiles.length > 0 || imageItems.length > 0) {
     e.preventDefault();
-    const files = imageItems.map((item) => item.getAsFile()).filter(Boolean);
-    await attachments.processFiles(files);
+    mentionSearchSeq++;
+    hideFileMentionPalette();
+    try {
+      const directImageFiles = pastedImageFiles.length > 0
+        ? pastedImageFiles
+        : imageItems.map((item) => item.getAsFile()).filter(Boolean);
+
+      if (directImageFiles.length > 1) {
+        await attachments.processFiles(directImageFiles);
+        updateFakeCaret();
+        return;
+      }
+
+      if (directImageFiles.length === 1) {
+        const primaryAttachment = await buildImageAttachmentFromFile(
+          directImageFiles[0],
+          pastedImageFiles.length > 0 ? "paste-file" : "paste-item"
+        );
+        let finalAttachment = primaryAttachment;
+        try {
+          const clipboardAttachment = await readClipboardImageFromLocalService();
+          finalAttachment = choosePreferredImageAttachment(primaryAttachment, clipboardAttachment);
+        } catch {}
+        attachments.add(finalAttachment);
+        updateFakeCaret();
+        return;
+      }
+
+      attachments.add(await readClipboardImageFromLocalService());
+    } catch {
+      const fallbackFiles = pastedImageFiles.length > 0
+        ? pastedImageFiles
+        : imageItems.map((item) => item.getAsFile()).filter(Boolean);
+      if (fallbackFiles.length > 0) {
+        await attachments.processFiles(fallbackFiles);
+      }
+    }
     updateFakeCaret();
     return;
+  }
+
+  if (pastedFiles.length > 0) {
+    const hasBinary = pastedFiles.some((file) => !file.type.startsWith("text/"));
+    if (hasBinary) {
+      e.preventDefault();
+      mentionSearchSeq++;
+      hideFileMentionPalette();
+      await attachments.processFiles(pastedFiles);
+      updateFakeCaret();
+      return;
+    }
   }
 
   const rawText = cd.getData("text/plain");
@@ -585,6 +1177,8 @@ messageInput.addEventListener("paste", async (e) => {
   const metaJson = cd.getData("application/vnd.code.copymetadata");
   if (metaJson && rawText) {
     e.preventDefault();
+    mentionSearchSeq++;
+    hideFileMentionPalette();
     attachments.processCodeMeta(metaJson, rawText);
     return;
   }
@@ -594,6 +1188,8 @@ messageInput.addEventListener("paste", async (e) => {
   );
   if (metaItem && rawText) {
     e.preventDefault();
+    mentionSearchSeq++;
+    hideFileMentionPalette();
     metaItem.getAsString((json) => attachments.processCodeMeta(json, rawText));
     return;
   }
@@ -601,6 +1197,8 @@ messageInput.addEventListener("paste", async (e) => {
   const vsData = cd.getData("vscode-editor-data");
   if (vsData && rawText && (rawText.includes("\n") || rawText.length > 80)) {
     e.preventDefault();
+    mentionSearchSeq++;
+    hideFileMentionPalette();
     let lang = "text";
     try { lang = JSON.parse(vsData)?.mode || "text"; } catch {}
 
@@ -641,11 +1239,13 @@ messageInput.addEventListener("paste", async (e) => {
     return;
   }
 
-  if (cd.files && cd.files.length > 0) {
-    const nonText = [...cd.files].filter((f) => !f.type.startsWith("text/"));
+  if (pastedFiles.length > 0) {
+    const nonText = pastedFiles.filter((f) => !f.type.startsWith("text/"));
     if (nonText.length > 0) {
       e.preventDefault();
-      await attachments.processFiles(cd.files);
+      mentionSearchSeq++;
+      hideFileMentionPalette();
+      await attachments.processFiles(pastedFiles);
     }
   }
 });
@@ -666,6 +1266,8 @@ inputShell.addEventListener("dragleave", (e) => {
 inputShell.addEventListener("drop", async (e) => {
   e.preventDefault(); e.stopPropagation();
   dragCounter = 0; dragOverlay.hidden = true; inputShell.classList.remove("xh-drag-active");
+  mentionSearchSeq++;
+  hideFileMentionPalette();
 
     if (e.dataTransfer?.files?.length > 0) {
       await attachments.processFiles(e.dataTransfer.files);
@@ -708,6 +1310,8 @@ attachFileBtn.addEventListener("click", () => fileInput.click());
 attachImageBtn.addEventListener("click", () => imageInput.click());
 fileInput.addEventListener("change", () => {
   if (fileInput.files.length > 0) {
+    mentionSearchSeq++;
+    hideFileMentionPalette();
     const files = [...fileInput.files];
     fileInput.value = "";
     void attachments.processFiles(files).finally(() => updateFakeCaret());
@@ -715,6 +1319,8 @@ fileInput.addEventListener("change", () => {
 });
 imageInput.addEventListener("change", () => {
   if (imageInput.files.length > 0) {
+    mentionSearchSeq++;
+    hideFileMentionPalette();
     const files = [...imageInput.files];
     imageInput.value = "";
     void attachments.processFiles(files).finally(() => updateFakeCaret());
@@ -722,6 +1328,10 @@ imageInput.addEventListener("change", () => {
 });
 
 document.addEventListener("click", (e) => {
+  if (fileMentionPalette.visible && !fileMentionPalette.contains(e.target) && e.target !== messageInput) {
+    mentionSearchSeq++;
+    hideFileMentionPalette();
+  }
   if (cmdPalette.visible && !cmdPalette.el.contains(e.target) && e.target !== messageInput) {
     cmdPalette.hide();
   }
@@ -743,10 +1353,6 @@ app.ontoolinput = (params) => {
 app.ontoolresult = (result) => {
   const nextState = extractPromptStateFromToolResult(result);
   uiState.conversationId = nextState.conversationId || uiState.conversationId;
-  if (nextState.previewMessage) {
-    uiState.anyWaiting = false; uiState.waiting = false; uiState.activeTool = false;
-    uiState.completedTool = true; uiState.submittedMessage = nextState.previewMessage; uiState.submittedAt = "";
-  }
   void refreshState().catch(() => render());
 };
 

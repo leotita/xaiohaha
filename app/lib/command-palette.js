@@ -4,11 +4,16 @@ import { escapeHtml } from "./utils.js";
 export class CommandPalette {
   constructor(paletteEl) {
     this.el = paletteEl;
+    this.anchorEl = null;
     this.visible = false;
     this.filter = "";
     this.selectedIndex = -1;
     this.filtered = [];
     this.onExecute = null;
+  }
+
+  setAnchorEl(anchorEl) {
+    this.anchorEl = anchorEl;
   }
 
   getFilteredCommands(filter) {
@@ -26,18 +31,10 @@ export class CommandPalette {
       return;
     }
 
-    const wasVisible = this.visible;
     this.visible = true;
     this.filter = filter;
     this.filtered = filtered;
-
-    if (!wasVisible) {
-      this.selectedIndex = -1;
-    } else {
-      this.selectedIndex = this.selectedIndex < 0
-        ? -1
-        : Math.min(this.selectedIndex, filtered.length - 1);
-    }
+    this.selectedIndex = 0;
 
     this.el.hidden = false;
     this.renderItems();
@@ -53,6 +50,7 @@ export class CommandPalette {
   }
 
   renderItems() {
+    this.updatePlacement();
     this.el.innerHTML = this.filtered
       .map(
         (cmd, i) => `
@@ -70,8 +68,11 @@ export class CommandPalette {
       el.addEventListener("click", () => this.onExecute?.(el.dataset.cmdId));
       el.addEventListener("mouseenter", () => {
         this.selectedIndex = Number(el.dataset.cmdIndex);
+        this.syncActiveItem();
       });
     });
+
+    this.syncActiveItem();
   }
 
   moveSelection(delta) {
@@ -81,9 +82,7 @@ export class CommandPalette {
     } else {
       this.selectedIndex = (this.selectedIndex + delta + this.filtered.length) % this.filtered.length;
     }
-    this.el.querySelectorAll(".xh-cmd-item").forEach((item, idx) => {
-      item.classList.toggle("active", idx === this.selectedIndex);
-    });
+    this.syncActiveItem();
   }
 
   getSelectedCommandId() {
@@ -102,5 +101,32 @@ export class CommandPalette {
     } else if (this.visible) {
       this.hide();
     }
+  }
+
+  updatePlacement() {
+    const anchor = this.anchorEl;
+    if (!anchor || typeof anchor.getBoundingClientRect !== "function") {
+      this.el.classList.remove("xh-palette-above");
+      return;
+    }
+
+    const rect = anchor.getBoundingClientRect();
+    const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || 0;
+    const estimatedHeight = Math.min(240, Math.max(120, (this.filtered.length || 4) * 44 + 12));
+    const spaceAbove = rect.top;
+    const spaceBelow = Math.max(0, viewportHeight - rect.bottom);
+    const placeAbove = spaceAbove > spaceBelow && spaceAbove >= Math.min(estimatedHeight, 180);
+
+    this.el.classList.toggle("xh-palette-above", placeAbove);
+  }
+
+  syncActiveItem() {
+    this.el.querySelectorAll(".xh-cmd-item").forEach((item, idx) => {
+      const isActive = idx === this.selectedIndex;
+      item.classList.toggle("active", isActive);
+      if (isActive) {
+        item.scrollIntoView({ block: "nearest" });
+      }
+    });
   }
 }

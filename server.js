@@ -1,6 +1,7 @@
 import http from "node:http";
 
 import { BASE_URL, HOST, MCP_ENDPOINT_URL, PORT } from "./src/config.js";
+import { AttachmentStore } from "./src/attachment-store.js";
 import { createChatHttpServer } from "./src/http-server.js";
 import { debugLog, registerShutdownHandlers } from "./src/process-manager.js";
 import { SessionService } from "./src/session-service.js";
@@ -31,8 +32,10 @@ async function listen(server, port, host) {
 async function start() {
   const sessionService = new SessionService();
   await sessionService.initialize();
+  const attachmentStore = new AttachmentStore();
+  await attachmentStore.initialize();
 
-  const runtime = createChatHttpServer({ sessionService });
+  const runtime = createChatHttpServer({ sessionService, attachmentStore });
   const httpServer = http.createServer(runtime.app);
 
   registerShutdownHandlers(async () => {

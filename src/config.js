@@ -2,6 +2,11 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const PROJECT_ROOT = fileURLToPath(new URL("../", import.meta.url)).replace(/\/$/, "");
+export const WORKSPACE_ROOT = process.env.XIAOHAHA_WORKSPACE_ROOT
+  ? path.resolve(process.env.XIAOHAHA_WORKSPACE_ROOT)
+  : process.env.XIAOHAHA_PROJECT_ROOT
+  ? path.resolve(process.env.XIAOHAHA_PROJECT_ROOT)
+  : PROJECT_ROOT;
 export const SERVER_ENTRY_PATH = fileURLToPath(new URL("../server.js", import.meta.url));
 export const BUNDLE_PATH = fileURLToPath(new URL("../app/dist/mcp-chat-ui.bundle.js", import.meta.url));
 

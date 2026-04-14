@@ -1,5 +1,12 @@
 import { MAX_FILE_SIZE_BYTES, MAX_IMAGE_SIZE_BYTES, MAX_ATTACHMENTS } from "./constants.js";
-import { escapeHtml, formatFileSize, getFileExtension, isTextFile, isImageFile, readAsText, readAsDataUrl } from "./utils.js";
+import { escapeHtml, formatFileSize, isTextFile, isImageFile, readAsText, readAsDataUrl } from "./utils.js";
+
+function normalizeAttachmentPath(filePath) {
+  return String(filePath || "")
+    .replaceAll("\\", "/")
+    .replace(/^\.\//, "")
+    .trim();
+}
 
 export class AttachmentManager {
   constructor(barEl) {
@@ -7,6 +14,7 @@ export class AttachmentManager {
     this.list = [];
     this.nextId = 1;
     this.onError = null;
+    this.onPreview = null;
   }
 
   get length() {
@@ -28,6 +36,9 @@ export class AttachmentManager {
     const att = this.list.find((a) => a.id === id);
     if (att) {
       Object.assign(att, patch);
+      if (patch && ("content" in patch || "file" in patch || "filePath" in patch)) {
+        delete att.uploadedRef;
+      }
       this.renderBar();
     }
   }
@@ -95,6 +106,40 @@ export class AttachmentManager {
     }
   }
 
+  addProjectFile(file) {
+    if (!file || typeof file !== "object") return -1;
+    const filePath = normalizeAttachmentPath(file.path || "");
+    const type = file.type === "image" ? "image" : "file";
+    const existing = this.list.find((att) => (
+      att.type === type
+      && normalizeAttachmentPath(att.filePath) === filePath
+      && filePath
+    ));
+    if (existing) {
+      return existing.id;
+    }
+
+    if (file.type === "image") {
+      return this.add({
+        type: "image",
+        name: file.name || "image",
+        filePath,
+        content: file.content,
+        mimeType: file.mimeType || "image/png",
+        size: Number(file.size) || 0,
+      });
+    }
+
+    return this.add({
+      type: "file",
+      name: file.name || "file",
+      filePath,
+      content: typeof file.content === "string" ? file.content : "",
+      mimeType: file.mimeType || "text/plain",
+      size: Number(file.size) || 0,
+    });
+  }
+
   renderBar() {
     if (this.list.length === 0) {
       this.barEl.hidden = true;
@@ -105,12 +150,14 @@ export class AttachmentManager {
     this.barEl.hidden = false;
     this.barEl.innerHTML = this.list
       .map((att) => {
+        const label = escapeHtml(att.filePath || att.name);
         if (att.type === "image") {
           const src = att.content || att.objectUrl;
           return `<div class="xh-att-chip" data-att-id="${att.id}">
-            <img class="xh-att-thumb" src="${escapeHtml(src)}" alt="">
-            <span class="xh-att-name">${escapeHtml(att.name)}</span>
-            <span class="xh-att-size">${formatFileSize(att.size)}</span>
+            <button class="xh-att-preview" data-att-id="${att.id}" type="button" title="查看大图" aria-label="查看大图">
+              <img class="xh-att-thumb" src="${escapeHtml(src)}" alt="">
+            </button>
+            <span class="xh-att-name">${label}</span>
             <button class="xh-att-remove" data-att-id="${att.id}" type="button" title="移除">×</button>
           </div>`;
         }
@@ -123,8 +170,7 @@ export class AttachmentManager {
         }
         return `<div class="xh-att-chip" data-att-id="${att.id}">
           <span class="xh-att-icon">📄</span>
-          <span class="xh-att-name">${escapeHtml(att.name)}</span>
-          <span class="xh-att-size">${formatFileSize(att.size)}</span>
+          <span class="xh-att-name">${label}</span>
           <button class="xh-att-remove" data-att-id="${att.id}" type="button" title="移除">×</button>
         </div>`;
       })
@@ -135,6 +181,18 @@ export class AttachmentManager {
         e.preventDefault();
         e.stopPropagation();
         this.remove(Number(btn.dataset.attId));
+      });
+    });
+
+    this.barEl.querySelectorAll(".xh-att-preview").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const attId = Number(btn.dataset.attId);
+        const att = this.list.find((item) => item.id === attId);
+        if (att) {
+          this.onPreview?.(att);
+        }
       });
     });
   }
@@ -183,23 +241,74 @@ export class AttachmentManager {
     }
   }
 
+  async prepareAttachmentRefs(uploadAttachment) {
+    const refs = [];
+
+    for (const att of this.list) {
+      if (att.filePath) {
+        refs.push({
+          store: "project",
+          type: att.type,
+          path: att.filePath,
+          name: att.name,
+          mimeType: att.mimeType,
+          size: att.size,
+          lineRef: att.lineRef || undefined,
+        });
+        continue;
+      }
+
+      if (att.uploadedRef) {
+        refs.push(att.uploadedRef);
+        continue;
+      }
+
+      let body = "";
+      let mimeType = att.mimeType || "application/octet-stream";
+      let encoding = "";
+      if (att.type === "image") {
+        body = typeof att.content === "string" ? att.content : "";
+        encoding = "data_url";
+      } else {
+        body = typeof att.content === "string" ? att.content : "";
+      }
+
+      const uploadedRef = await uploadAttachment({
+        type: att.type,
+        name: att.name,
+        mimeType,
+        size: att.size,
+        path: att.filePath || "",
+        lineRef: att.lineRef || "",
+        encoding,
+        body,
+      });
+
+      att.uploadedRef = uploadedRef;
+      refs.push(uploadedRef);
+    }
+
+    return refs;
+  }
+
   buildFullMessage(rawText) {
     if (this.list.length === 0) return rawText;
 
     let message = rawText;
     for (const att of this.list) {
       if (att.type === "image") {
-        message += `\n\n[XIAOHAHA_IMG:${att.content}]`;
+        if (typeof att.content === "string" && att.content) {
+          message += `\n\n[XIAOHAHA_IMG:${att.content}]`;
+        }
       } else if (att.type === "snippet") {
-        const ref = att.filePath ? `${att.filePath}${att.lineRef}` : att.name;
-        const baseName = att.name.replace(/\s*\([\d\-]+\)$/, "").split(":")[0];
-        const ext = getFileExtension(baseName);
-        message += `\n\n📋 \`${ref}\`:\n\`\`\`${ext}\n${att.content}\n\`\`\``;
+        const ref = att.filePath ? `${att.filePath}${att.lineRef || ""}` : att.name;
+        message += `\n\n📋 \`${ref}\`:\n\`\`\`\n${att.content || ""}\n\`\`\``;
       } else {
-        const ext = getFileExtension(att.name);
-        message += `\n\n📎 ${att.name}:\n\`\`\`${ext}\n${att.content}\n\`\`\``;
+        const ref = att.filePath || att.name;
+        message += `\n\n📎 ${ref}:\n\`\`\`\n${att.content || ""}\n\`\`\``;
       }
     }
+
     return message;
   }
 
@@ -210,16 +319,18 @@ export class AttachmentManager {
     if (rawText) parts.push(rawText);
 
     const imageCount = this.list.filter((a) => a.type === "image").length;
-    const fileCount = this.list.filter((a) => a.type === "file").length;
-    const snippetCount = this.list.filter((a) => a.type === "snippet").length;
-    const labels = [];
-    if (imageCount > 0) labels.push(`🖼️ ${imageCount} 张图片`);
-    if (fileCount > 0) labels.push(`📎 ${fileCount} 个文件`);
-    if (snippetCount > 0) {
-      const names = this.list.filter((a) => a.type === "snippet").map((a) => `\`${a.name}\``).join("  ");
-      labels.push(`📋 ${names}`);
+    const labels = this.list.map((att) => {
+      if (att.type === "image") return null;
+      if (att.type === "snippet") return `📋 ${att.name}`;
+      return `📎 ${att.filePath || att.name}`;
+    }).filter(Boolean);
+
+    if (labels.length > 0) {
+      parts.push(labels.join("\n"));
     }
-    if (labels.length > 0) parts.push(labels.join("  "));
+    if (imageCount > 0) {
+      parts.push(`🖼️ ${imageCount} 张图片`);
+    }
 
     return parts.join("\n\n");
   }

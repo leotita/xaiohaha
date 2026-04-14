@@ -14110,6 +14110,11 @@ container holding the app. Specify either width or maxWidth, and either height o
     background-color: transparent !important;
   }
 
+  .xh-composer-layer {
+    position: relative;
+    width: 100%;
+  }
+
   .xh-input-shell {
     position: relative;
     width: 100%;
@@ -14249,11 +14254,6 @@ container holding the app. Specify either width or maxWidth, and either height o
     max-width: 220px;
     cursor: default;
     transition: background 120ms ease;
-    animation: xh-chip-in 200ms ease;
-  }
-  @keyframes xh-chip-in {
-    from { opacity: 0; transform: scale(0.92); }
-    to   { opacity: 1; transform: scale(1); }
   }
   .xh-att-chip:hover {
     background: rgba(255, 255, 255, 0.10);
@@ -14265,6 +14265,29 @@ container holding the app. Specify either width or maxWidth, and either height o
     border-radius: 4px;
     object-fit: cover;
     flex-shrink: 0;
+  }
+
+  .xh-att-preview {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: zoom-in;
+    border-radius: 6px;
+    flex-shrink: 0;
+  }
+  .xh-att-preview:hover .xh-att-thumb {
+    transform: scale(1.03);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
+  }
+  .xh-att-preview:focus-visible {
+    outline: 1px solid rgba(255, 255, 255, 0.28);
+    outline-offset: 2px;
+  }
+  .xh-att-preview .xh-att-thumb {
+    transition: transform 120ms ease, box-shadow 120ms ease;
   }
 
   .xh-att-icon {
@@ -14279,12 +14302,6 @@ container holding the app. Specify either width or maxWidth, and either height o
     text-overflow: ellipsis;
     flex: 1;
     min-width: 0;
-  }
-
-  .xh-att-size {
-    font-size: 10px;
-    opacity: 0.6;
-    flex-shrink: 0;
   }
 
   .xh-att-remove {
@@ -14307,6 +14324,94 @@ container holding the app. Specify either width or maxWidth, and either height o
   .xh-att-remove:hover {
     background: rgba(255, 100, 100, 0.3);
     color: #ff8f8f;
+  }
+
+  .xh-lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(0, 0, 0, 0.76);
+    backdrop-filter: blur(10px);
+  }
+  .xh-lightbox[hidden] {
+    display: none;
+  }
+
+  .xh-lightbox-panel {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    width: min(92vw, 920px);
+    max-height: calc(100vh - 48px);
+  }
+
+  .xh-lightbox-close {
+    position: absolute;
+    top: -8px;
+    right: -8px;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: none;
+    border-radius: 999px;
+    background: rgba(20, 20, 20, 0.86);
+    color: var(--xh-text);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+  }
+
+  .xh-lightbox-frame {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 14px;
+    border-radius: 18px;
+    background: rgba(24, 24, 24, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+    overflow: auto;
+    cursor: zoom-in;
+  }
+  .xh-lightbox-frame.xh-lightbox-frame--zoomed {
+    align-items: flex-start;
+    justify-content: flex-start;
+    cursor: zoom-out;
+  }
+
+  .xh-lightbox-img {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    max-height: calc(100vh - 140px);
+    object-fit: contain;
+    border-radius: 12px;
+  }
+  .xh-lightbox-frame.xh-lightbox-frame--zoomed .xh-lightbox-img {
+    width: auto;
+    max-width: none;
+    max-height: none;
+    object-fit: initial;
+  }
+
+  .xh-lightbox-caption {
+    max-width: min(92vw, 720px);
+    text-align: center;
+    color: var(--xh-muted);
+    font-size: 12px;
+    line-height: 1.45;
+    word-break: break-word;
   }
 
   /* \u2500\u2500 Input action bar \u2500\u2500 */
@@ -14372,14 +14477,21 @@ container holding the app. Specify either width or maxWidth, and either height o
 
   /* \u2500\u2500 Slash command palette \u2500\u2500 */
   .xh-cmd-palette {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: calc(100% + 8px);
+    bottom: auto;
+    z-index: 40;
     width: 100%;
     background: var(--xh-surface, #202020);
     border: 1px solid var(--xh-border-strong);
     border-radius: 12px;
     padding: 4px;
-    margin-bottom: 6px;
+    margin: 0;
     box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
     overflow-y: auto;
+    max-height: min(240px, 45vh);
     animation: xh-palette-in 150ms ease;
   }
   @keyframes xh-palette-in {
@@ -14387,6 +14499,11 @@ container holding the app. Specify either width or maxWidth, and either height o
     to   { opacity: 1; transform: translateY(0); }
   }
   .xh-cmd-palette[hidden] { display: none; }
+
+  .xh-cmd-palette.xh-palette-above {
+    top: auto;
+    bottom: calc(100% + 8px);
+  }
 
   .xh-cmd-item {
     display: flex;
@@ -14424,6 +14541,82 @@ container holding the app. Specify either width or maxWidth, and either height o
     font-size: 11px;
     color: var(--xh-muted);
     margin-top: 1px;
+  }
+
+  .xh-file-palette {
+    max-height: min(420px, 60vh);
+  }
+
+  .xh-file-empty {
+    padding: 12px 14px;
+    font-size: 12px;
+    color: var(--xh-muted);
+  }
+
+  .xh-file-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 9px 12px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+    transition: background 80ms ease;
+  }
+
+  .xh-file-item:hover,
+  .xh-file-item.active {
+    background: rgba(255, 255, 255, 0.07);
+  }
+
+  .xh-file-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    background: rgba(108, 92, 231, 0.16);
+    color: #c4b5fd;
+    font-size: 12px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .xh-file-body {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .xh-file-name {
+    color: var(--xh-text);
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .xh-file-path {
+    color: var(--xh-muted);
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 1px;
+  }
+
+  .xh-file-meta {
+    color: var(--xh-muted);
+    font-size: 10px;
+    flex-shrink: 0;
+    margin-left: 6px;
   }
 
 `;
@@ -14538,12 +14731,16 @@ container holding the app. Specify either width or maxWidth, and either height o
   }
 
   // app/lib/attachment-manager.js
+  function normalizeAttachmentPath(filePath) {
+    return String(filePath || "").replaceAll("\\", "/").replace(/^\.\//, "").trim();
+  }
   var AttachmentManager = class {
     constructor(barEl) {
       this.barEl = barEl;
       this.list = [];
       this.nextId = 1;
       this.onError = null;
+      this.onPreview = null;
     }
     get length() {
       return this.list.length;
@@ -14562,6 +14759,9 @@ container holding the app. Specify either width or maxWidth, and either height o
       const att = this.list.find((a) => a.id === id);
       if (att) {
         Object.assign(att, patch);
+        if (patch && ("content" in patch || "file" in patch || "filePath" in patch)) {
+          delete att.uploadedRef;
+        }
         this.renderBar();
       }
     }
@@ -14625,6 +14825,33 @@ container holding the app. Specify either width or maxWidth, and either height o
         }
       }
     }
+    addProjectFile(file2) {
+      if (!file2 || typeof file2 !== "object") return -1;
+      const filePath = normalizeAttachmentPath(file2.path || "");
+      const type = file2.type === "image" ? "image" : "file";
+      const existing = this.list.find((att) => att.type === type && normalizeAttachmentPath(att.filePath) === filePath && filePath);
+      if (existing) {
+        return existing.id;
+      }
+      if (file2.type === "image") {
+        return this.add({
+          type: "image",
+          name: file2.name || "image",
+          filePath,
+          content: file2.content,
+          mimeType: file2.mimeType || "image/png",
+          size: Number(file2.size) || 0
+        });
+      }
+      return this.add({
+        type: "file",
+        name: file2.name || "file",
+        filePath,
+        content: typeof file2.content === "string" ? file2.content : "",
+        mimeType: file2.mimeType || "text/plain",
+        size: Number(file2.size) || 0
+      });
+    }
     renderBar() {
       if (this.list.length === 0) {
         this.barEl.hidden = true;
@@ -14633,12 +14860,14 @@ container holding the app. Specify either width or maxWidth, and either height o
       }
       this.barEl.hidden = false;
       this.barEl.innerHTML = this.list.map((att) => {
+        const label = escapeHtml(att.filePath || att.name);
         if (att.type === "image") {
           const src = att.content || att.objectUrl;
           return `<div class="xh-att-chip" data-att-id="${att.id}">
-            <img class="xh-att-thumb" src="${escapeHtml(src)}" alt="">
-            <span class="xh-att-name">${escapeHtml(att.name)}</span>
-            <span class="xh-att-size">${formatFileSize(att.size)}</span>
+            <button class="xh-att-preview" data-att-id="${att.id}" type="button" title="\u67E5\u770B\u5927\u56FE" aria-label="\u67E5\u770B\u5927\u56FE">
+              <img class="xh-att-thumb" src="${escapeHtml(src)}" alt="">
+            </button>
+            <span class="xh-att-name">${label}</span>
             <button class="xh-att-remove" data-att-id="${att.id}" type="button" title="\u79FB\u9664">\xD7</button>
           </div>`;
         }
@@ -14651,8 +14880,7 @@ container holding the app. Specify either width or maxWidth, and either height o
         }
         return `<div class="xh-att-chip" data-att-id="${att.id}">
           <span class="xh-att-icon">\u{1F4C4}</span>
-          <span class="xh-att-name">${escapeHtml(att.name)}</span>
-          <span class="xh-att-size">${formatFileSize(att.size)}</span>
+          <span class="xh-att-name">${label}</span>
           <button class="xh-att-remove" data-att-id="${att.id}" type="button" title="\u79FB\u9664">\xD7</button>
         </div>`;
       }).join("");
@@ -14661,6 +14889,17 @@ container holding the app. Specify either width or maxWidth, and either height o
           e.preventDefault();
           e.stopPropagation();
           this.remove(Number(btn.dataset.attId));
+        });
+      });
+      this.barEl.querySelectorAll(".xh-att-preview").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const attId = Number(btn.dataset.attId);
+          const att = this.list.find((item) => item.id === attId);
+          if (att) {
+            this.onPreview?.(att);
+          }
         });
       });
     }
@@ -14707,31 +14946,74 @@ container holding the app. Specify either width or maxWidth, and either height o
         });
       }
     }
+    async prepareAttachmentRefs(uploadAttachment) {
+      const refs = [];
+      for (const att of this.list) {
+        if (att.filePath) {
+          refs.push({
+            store: "project",
+            type: att.type,
+            path: att.filePath,
+            name: att.name,
+            mimeType: att.mimeType,
+            size: att.size,
+            lineRef: att.lineRef || void 0
+          });
+          continue;
+        }
+        if (att.uploadedRef) {
+          refs.push(att.uploadedRef);
+          continue;
+        }
+        let body = "";
+        let mimeType = att.mimeType || "application/octet-stream";
+        let encoding = "";
+        if (att.type === "image") {
+          body = typeof att.content === "string" ? att.content : "";
+          encoding = "data_url";
+        } else {
+          body = typeof att.content === "string" ? att.content : "";
+        }
+        const uploadedRef = await uploadAttachment({
+          type: att.type,
+          name: att.name,
+          mimeType,
+          size: att.size,
+          path: att.filePath || "",
+          lineRef: att.lineRef || "",
+          encoding,
+          body
+        });
+        att.uploadedRef = uploadedRef;
+        refs.push(uploadedRef);
+      }
+      return refs;
+    }
     buildFullMessage(rawText) {
       if (this.list.length === 0) return rawText;
       let message = rawText;
       for (const att of this.list) {
         if (att.type === "image") {
-          message += `
+          if (typeof att.content === "string" && att.content) {
+            message += `
 
 [XIAOHAHA_IMG:${att.content}]`;
+          }
         } else if (att.type === "snippet") {
-          const ref = att.filePath ? `${att.filePath}${att.lineRef}` : att.name;
-          const baseName = att.name.replace(/\s*\([\d\-]+\)$/, "").split(":")[0];
-          const ext = getFileExtension(baseName);
+          const ref = att.filePath ? `${att.filePath}${att.lineRef || ""}` : att.name;
           message += `
 
 \u{1F4CB} \`${ref}\`:
-\`\`\`${ext}
-${att.content}
+\`\`\`
+${att.content || ""}
 \`\`\``;
         } else {
-          const ext = getFileExtension(att.name);
+          const ref = att.filePath || att.name;
           message += `
 
-\u{1F4CE} ${att.name}:
-\`\`\`${ext}
-${att.content}
+\u{1F4CE} ${ref}:
+\`\`\`
+${att.content || ""}
 \`\`\``;
         }
       }
@@ -14742,16 +15024,17 @@ ${att.content}
       const parts = [];
       if (rawText) parts.push(rawText);
       const imageCount = this.list.filter((a) => a.type === "image").length;
-      const fileCount = this.list.filter((a) => a.type === "file").length;
-      const snippetCount = this.list.filter((a) => a.type === "snippet").length;
-      const labels = [];
-      if (imageCount > 0) labels.push(`\u{1F5BC}\uFE0F ${imageCount} \u5F20\u56FE\u7247`);
-      if (fileCount > 0) labels.push(`\u{1F4CE} ${fileCount} \u4E2A\u6587\u4EF6`);
-      if (snippetCount > 0) {
-        const names = this.list.filter((a) => a.type === "snippet").map((a) => `\`${a.name}\``).join("  ");
-        labels.push(`\u{1F4CB} ${names}`);
+      const labels = this.list.map((att) => {
+        if (att.type === "image") return null;
+        if (att.type === "snippet") return `\u{1F4CB} ${att.name}`;
+        return `\u{1F4CE} ${att.filePath || att.name}`;
+      }).filter(Boolean);
+      if (labels.length > 0) {
+        parts.push(labels.join("\n"));
       }
-      if (labels.length > 0) parts.push(labels.join("  "));
+      if (imageCount > 0) {
+        parts.push(`\u{1F5BC}\uFE0F ${imageCount} \u5F20\u56FE\u7247`);
+      }
       return parts.join("\n\n");
     }
   };
@@ -14760,11 +15043,15 @@ ${att.content}
   var CommandPalette = class {
     constructor(paletteEl) {
       this.el = paletteEl;
+      this.anchorEl = null;
       this.visible = false;
       this.filter = "";
       this.selectedIndex = -1;
       this.filtered = [];
       this.onExecute = null;
+    }
+    setAnchorEl(anchorEl) {
+      this.anchorEl = anchorEl;
     }
     getFilteredCommands(filter) {
       if (!filter) return [...SLASH_COMMANDS];
@@ -14779,15 +15066,10 @@ ${att.content}
         this.hide();
         return;
       }
-      const wasVisible = this.visible;
       this.visible = true;
       this.filter = filter;
       this.filtered = filtered;
-      if (!wasVisible) {
-        this.selectedIndex = -1;
-      } else {
-        this.selectedIndex = this.selectedIndex < 0 ? -1 : Math.min(this.selectedIndex, filtered.length - 1);
-      }
+      this.selectedIndex = 0;
       this.el.hidden = false;
       this.renderItems();
     }
@@ -14800,6 +15082,7 @@ ${att.content}
       this.el.innerHTML = "";
     }
     renderItems() {
+      this.updatePlacement();
       this.el.innerHTML = this.filtered.map(
         (cmd, i) => `
       <div class="xh-cmd-item${i === this.selectedIndex ? " active" : ""}" data-cmd-index="${i}" data-cmd-id="${cmd.id}">
@@ -14814,8 +15097,10 @@ ${att.content}
         el.addEventListener("click", () => this.onExecute?.(el.dataset.cmdId));
         el.addEventListener("mouseenter", () => {
           this.selectedIndex = Number(el.dataset.cmdIndex);
+          this.syncActiveItem();
         });
       });
+      this.syncActiveItem();
     }
     moveSelection(delta) {
       if (!this.visible || this.filtered.length === 0) return;
@@ -14824,9 +15109,7 @@ ${att.content}
       } else {
         this.selectedIndex = (this.selectedIndex + delta + this.filtered.length) % this.filtered.length;
       }
-      this.el.querySelectorAll(".xh-cmd-item").forEach((item, idx) => {
-        item.classList.toggle("active", idx === this.selectedIndex);
-      });
+      this.syncActiveItem();
     }
     getSelectedCommandId() {
       if (this.selectedIndex < 0 || this.selectedIndex >= this.filtered.length) return null;
@@ -14843,6 +15126,154 @@ ${att.content}
         this.hide();
       }
     }
+    updatePlacement() {
+      const anchor = this.anchorEl;
+      if (!anchor || typeof anchor.getBoundingClientRect !== "function") {
+        this.el.classList.remove("xh-palette-above");
+        return;
+      }
+      const rect = anchor.getBoundingClientRect();
+      const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || 0;
+      const estimatedHeight = Math.min(240, Math.max(120, (this.filtered.length || 4) * 44 + 12));
+      const spaceAbove = rect.top;
+      const spaceBelow = Math.max(0, viewportHeight - rect.bottom);
+      const placeAbove = spaceAbove > spaceBelow && spaceAbove >= Math.min(estimatedHeight, 180);
+      this.el.classList.toggle("xh-palette-above", placeAbove);
+    }
+    syncActiveItem() {
+      this.el.querySelectorAll(".xh-cmd-item").forEach((item, idx) => {
+        const isActive = idx === this.selectedIndex;
+        item.classList.toggle("active", isActive);
+        if (isActive) {
+          item.scrollIntoView({ block: "nearest" });
+        }
+      });
+    }
+  };
+
+  // app/lib/file-mention-palette.js
+  var FileMentionPalette = class {
+    constructor(el) {
+      this.el = el;
+      this.anchorEl = null;
+      this.visible = false;
+      this.loading = false;
+      this.query = "";
+      this.items = [];
+      this.selectedIndex = -1;
+      this.onSelect = null;
+    }
+    contains(target) {
+      return this.el.contains(target);
+    }
+    setAnchorEl(anchorEl) {
+      this.anchorEl = anchorEl;
+    }
+    showLoading(query = "") {
+      this.visible = true;
+      this.loading = true;
+      this.query = query;
+      this.items = [];
+      this.selectedIndex = -1;
+      this.el.hidden = false;
+      this.render();
+    }
+    showItems(items, query = "") {
+      this.visible = true;
+      this.loading = false;
+      this.query = query;
+      this.items = Array.isArray(items) ? items : [];
+      this.selectedIndex = this.items.length > 0 ? 0 : -1;
+      this.el.hidden = false;
+      this.render();
+    }
+    hide() {
+      this.visible = false;
+      this.loading = false;
+      this.query = "";
+      this.items = [];
+      this.selectedIndex = -1;
+      this.el.hidden = true;
+      this.el.innerHTML = "";
+    }
+    getSelectedItem() {
+      if (this.selectedIndex < 0 || this.selectedIndex >= this.items.length) return null;
+      return this.items[this.selectedIndex] || null;
+    }
+    moveSelection(delta) {
+      if (!this.visible || this.loading || this.items.length === 0) return;
+      this.selectedIndex = this.selectedIndex < 0 ? 0 : (this.selectedIndex + delta + this.items.length) % this.items.length;
+      this.syncActiveItem();
+    }
+    render() {
+      if (!this.visible) {
+        this.el.hidden = true;
+        this.el.innerHTML = "";
+        return;
+      }
+      this.updatePlacement();
+      if (this.loading) {
+        this.el.innerHTML = `<div class="xh-file-empty">\u641C\u7D22\u9879\u76EE\u6587\u4EF6...</div>`;
+        return;
+      }
+      if (this.items.length === 0) {
+        const suffix = this.query ? `\u201C${escapeHtml(this.query)}\u201D` : "";
+        this.el.innerHTML = `<div class="xh-file-empty">\u672A\u627E\u5230\u5339\u914D\u6587\u4EF6 ${suffix}</div>`;
+        return;
+      }
+      this.el.innerHTML = this.items.map((item, index) => {
+        const meta = typeof item.size === "number" ? formatFileSize(item.size) : "\u9879\u76EE\u6587\u4EF6";
+        const pathLabel = this.formatPathLabel(item.path || "");
+        return `<button class="xh-file-item${index === this.selectedIndex ? " active" : ""}" data-file-index="${index}" type="button">
+          <span class="xh-file-icon">@</span>
+          <span class="xh-file-body">
+            <span class="xh-file-name">${escapeHtml(item.name || item.path || "")}</span>
+            <span class="xh-file-path">${escapeHtml(pathLabel)}</span>
+          </span>
+          <span class="xh-file-meta">${escapeHtml(meta)}</span>
+        </button>`;
+      }).join("");
+      this.el.querySelectorAll(".xh-file-item").forEach((itemEl) => {
+        itemEl.addEventListener("mouseenter", () => {
+          this.selectedIndex = Number(itemEl.dataset.fileIndex);
+          this.syncActiveItem();
+        });
+        itemEl.addEventListener("click", () => {
+          const index = Number(itemEl.dataset.fileIndex);
+          const item = this.items[index];
+          if (item) this.onSelect?.(item);
+        });
+      });
+      this.syncActiveItem();
+    }
+    updatePlacement() {
+      const anchor = this.anchorEl;
+      if (!anchor || typeof anchor.getBoundingClientRect !== "function") {
+        this.el.classList.remove("xh-palette-above");
+        return;
+      }
+      const rect = anchor.getBoundingClientRect();
+      const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || 0;
+      const estimatedHeight = Math.min(280, Math.max(120, (this.items.length || 4) * 44 + 12));
+      const spaceAbove = rect.top;
+      const spaceBelow = Math.max(0, viewportHeight - rect.bottom);
+      const placeAbove = spaceAbove > spaceBelow && spaceAbove >= Math.min(estimatedHeight, 180);
+      this.el.classList.toggle("xh-palette-above", placeAbove);
+    }
+    formatPathLabel(rawPath) {
+      if (!rawPath) return "";
+      return rawPath.includes("/") ? rawPath : `./${rawPath}`;
+    }
+    syncActiveItem() {
+      const nodes = this.el.querySelectorAll(".xh-file-item");
+      nodes.forEach((item, index) => {
+        const isActive = index === this.selectedIndex;
+        item.classList.toggle("active", isActive);
+        if (isActive) {
+          item.scrollIntoView({ block: "nearest" });
+        }
+      });
+    }
   };
 
   // app/mcp-chat-ui.js
@@ -14852,43 +15283,57 @@ ${att.content}
   var BROWSER_CHAT_BASE_URL = typeof window.__XIAOHAHA_BROWSER_CHAT_URL === "string" ? window.__XIAOHAHA_BROWSER_CHAT_URL : "";
   var LOCAL_HTTP_TIMEOUT_MS = 4e3;
   var LOCAL_SEND_TIMEOUT_MS = 8e3;
+  var LOCAL_UPLOAD_TIMEOUT_MS = 2e4;
+  var FILE_MENTION_SEARCH_DEBOUNCE_MS = 60;
   var root = document.getElementById("app");
   if (!root) throw new Error("Missing #app mount element.");
-  var needsFullDom = !root.querySelector("#inputShell") || !root.querySelector("#cmdPalette") || root.querySelector("#cmdPalette")?.closest("#inputShell");
+  var needsFullDom = !root.querySelector("#inputShell") || !root.querySelector("#cmdPalette") || !root.querySelector("#fileMentionPalette") || !root.querySelector("#composerLayer") || !root.querySelector("#imageLightbox") || !root.querySelector("#cmdPalette")?.closest("#inputShell") || !root.querySelector("#fileMentionPalette")?.closest("#inputShell");
   if (needsFullDom) {
     root.innerHTML = `
     <div class="xh-root">
       <div class="xh-preview" id="sentPreview" hidden></div>
-      <div class="xh-cmd-palette" id="cmdPalette" hidden></div>
-      <form class="xh-form" id="composerForm">
-        <div class="xh-input-shell" id="inputShell">
-          <div class="xh-attachments" id="attachmentBar" hidden></div>
-          <div class="xh-fake-caret" id="fakeCaret" hidden></div>
-          <textarea
-            class="xh-input"
-            id="messageInput"
-            rows="1"
-            placeholder="\u7EE7\u7EED\u7ED9 Agent \u53D1\u6D88\u606F... (/ \u8C03\u51FA\u547D\u4EE4)"
-          ></textarea>
-          <div class="xh-input-actions">
-            <button class="xh-action-btn" id="openBrowserBtn" type="button" title="\u5728\u6D4F\u89C8\u5668\u7EE7\u7EED\u8F93\u5165">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg>
-            </button>
-            <button class="xh-action-btn" id="attachFileBtn" type="button" title="\u6DFB\u52A0\u6587\u4EF6">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
-            </button>
-            <button class="xh-action-btn" id="attachImageBtn" type="button" title="\u6DFB\u52A0\u56FE\u7247">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-            </button>
+      <div class="xh-composer-layer" id="composerLayer">
+        <form class="xh-form" id="composerForm">
+          <div class="xh-input-shell" id="inputShell">
+            <div class="xh-cmd-palette xh-file-palette" id="fileMentionPalette" hidden></div>
+            <div class="xh-cmd-palette" id="cmdPalette" hidden></div>
+            <div class="xh-attachments" id="attachmentBar" hidden></div>
+            <div class="xh-fake-caret" id="fakeCaret" hidden></div>
+            <textarea
+              class="xh-input"
+              id="messageInput"
+              rows="1"
+              placeholder="\u7EE7\u7EED\u7ED9 Agent \u53D1\u6D88\u606F... (/ \u8C03\u51FA\u547D\u4EE4)"
+            ></textarea>
+            <div class="xh-input-actions">
+              <button class="xh-action-btn" id="openBrowserBtn" type="button" title="\u5728\u6D4F\u89C8\u5668\u7EE7\u7EED\u8F93\u5165">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg>
+              </button>
+              <button class="xh-action-btn" id="attachFileBtn" type="button" title="\u6DFB\u52A0\u6587\u4EF6">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+              </button>
+              <button class="xh-action-btn" id="attachImageBtn" type="button" title="\u6DFB\u52A0\u56FE\u7247">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              </button>
+            </div>
+            <div class="xh-drag-overlay" id="dragOverlay" hidden>
+              <div class="xh-drag-label">\u91CA\u653E\u4EE5\u6DFB\u52A0\u6587\u4EF6</div>
+            </div>
           </div>
-          <div class="xh-drag-overlay" id="dragOverlay" hidden>
-            <div class="xh-drag-label">\u91CA\u653E\u4EE5\u6DFB\u52A0\u6587\u4EF6</div>
-          </div>
-        </div>
-      </form>
+        </form>
+      </div>
       <input type="file" id="fileInput" multiple hidden>
       <input type="file" id="imageInput" accept="image/*" multiple hidden>
       <div class="xh-error" id="errorBanner" hidden></div>
+      <div class="xh-lightbox" id="imageLightbox" hidden>
+        <div class="xh-lightbox-panel">
+          <button class="xh-lightbox-close" id="imageLightboxClose" type="button" aria-label="\u5173\u95ED\u9884\u89C8">\xD7</button>
+          <div class="xh-lightbox-frame">
+            <img class="xh-lightbox-img" id="imageLightboxImg" alt="">
+          </div>
+          <div class="xh-lightbox-caption" id="imageLightboxCaption"></div>
+        </div>
+      </div>
     </div>
   `;
   }
@@ -14905,7 +15350,13 @@ ${att.content}
   var fileInput = document.getElementById("fileInput");
   var imageInput = document.getElementById("imageInput");
   var dragOverlay = document.getElementById("dragOverlay");
-  var app = new gQ({ name: "xiaohaha-chat-ui", version: "1.0.3" }, {}, { autoResize: true });
+  var fileMentionPaletteEl = document.getElementById("fileMentionPalette");
+  var imageLightbox = document.getElementById("imageLightbox");
+  var imageLightboxFrame = document.getElementById("imageLightbox")?.querySelector(".xh-lightbox-frame");
+  var imageLightboxImg = document.getElementById("imageLightboxImg");
+  var imageLightboxCaption = document.getElementById("imageLightboxCaption");
+  var imageLightboxClose = document.getElementById("imageLightboxClose");
+  var app = new gQ({ name: "xiaohaha-chat-ui", version: "1.0.7" }, {}, { autoResize: true });
   var uiState = {
     connected: false,
     instanceId: "",
@@ -14923,13 +15374,25 @@ ${att.content}
   var pollTimer = null;
   var isComposing = false;
   var dragCounter = 0;
+  var isImageLightboxZoomed = false;
+  var activeImageLightboxAttachment = null;
   var attachments = new AttachmentManager(attachmentBar);
   attachments.onError = (msg) => {
     uiState.error = msg;
     render();
   };
+  attachments.onPreview = openImageLightbox;
   var cmdPalette = new CommandPalette(document.getElementById("cmdPalette"));
+  cmdPalette.setAnchorEl(inputShell);
   cmdPalette.onExecute = executeCommand;
+  var fileMentionPalette = new FileMentionPalette(fileMentionPaletteEl);
+  fileMentionPalette.setAnchorEl(inputShell);
+  fileMentionPalette.onSelect = (item) => {
+    void attachMentionedProjectFile(item);
+  };
+  var mentionSearchTimer = null;
+  var mentionSearchSeq = 0;
+  var activeMention = null;
   function autoResizeInput(force = false) {
     if (isComposing && !force) return;
     messageInput.style.height = `${INPUT_MIN_HEIGHT_PX}px`;
@@ -14944,6 +15407,238 @@ ${att.content}
     const showFakeCaret = showComposer && uiState.connected && !uiState.sending && !hasRealFocus && !messageInput.value && attachmentBar.hidden;
     fakeCaret.hidden = !showFakeCaret;
     inputShell.classList.toggle("xh-pseudo-focus", showFakeCaret);
+  }
+  function isImageLightboxOpen() {
+    return !imageLightbox.hidden;
+  }
+  function setImageLightboxZoomed(nextValue) {
+    isImageLightboxZoomed = Boolean(nextValue);
+    imageLightboxFrame.classList.toggle("xh-lightbox-frame--zoomed", isImageLightboxZoomed);
+    applyImageLightboxLayout();
+  }
+  function getImageLightboxViewportSize() {
+    const panelWidth = Math.min(window.innerWidth * 0.92, 920);
+    return {
+      maxWidth: Math.max(160, Math.floor(panelWidth - 28)),
+      maxHeight: Math.max(160, Math.floor(window.innerHeight - 140))
+    };
+  }
+  function setLightboxImageStyle(name, value) {
+    imageLightboxImg.style.setProperty(name, value, "important");
+  }
+  function clearLightboxImageStyle(name) {
+    imageLightboxImg.style.removeProperty(name);
+  }
+  function applyImageLightboxLayout() {
+    if (imageLightbox.hidden) {
+      return;
+    }
+    const naturalWidth = Number(activeImageLightboxAttachment?.pixelWidth) || imageLightboxImg.naturalWidth || 0;
+    const naturalHeight = Number(activeImageLightboxAttachment?.pixelHeight) || imageLightboxImg.naturalHeight || 0;
+    if (!naturalWidth || !naturalHeight) {
+      return;
+    }
+    activeImageLightboxAttachment = {
+      ...activeImageLightboxAttachment || {},
+      pixelWidth: naturalWidth,
+      pixelHeight: naturalHeight
+    };
+    let displayWidth = naturalWidth;
+    let displayHeight = naturalHeight;
+    if (!isImageLightboxZoomed) {
+      const { maxWidth, maxHeight } = getImageLightboxViewportSize();
+      const fitScale = Math.min(maxWidth / naturalWidth, maxHeight / naturalHeight);
+      const safeScale = Number.isFinite(fitScale) && fitScale > 0 ? fitScale : 1;
+      displayWidth = Math.max(1, Math.round(naturalWidth * safeScale));
+      displayHeight = Math.max(1, Math.round(naturalHeight * safeScale));
+    }
+    setLightboxImageStyle("width", `${displayWidth}px`);
+    setLightboxImageStyle("height", `${displayHeight}px`);
+    setLightboxImageStyle("max-width", "none");
+    setLightboxImageStyle("max-height", "none");
+    setLightboxImageStyle("min-width", "0");
+    setLightboxImageStyle("min-height", "0");
+    setLightboxImageStyle("object-fit", "fill");
+  }
+  function openImageLightbox(att) {
+    const src = typeof att?.content === "string" ? att.content : "";
+    if (!src) {
+      return;
+    }
+    activeImageLightboxAttachment = {
+      pixelWidth: Number(att?.pixelWidth) || 0,
+      pixelHeight: Number(att?.pixelHeight) || 0
+    };
+    setImageLightboxZoomed(false);
+    imageLightboxImg.src = src;
+    imageLightboxImg.alt = att?.name || "image preview";
+    imageLightboxCaption.textContent = `${att?.filePath || att?.name || ""}${att?.name || att?.filePath ? " \xB7 \u70B9\u51FB\u56FE\u7247\u5207\u6362\u7F29\u653E" : "\u70B9\u51FB\u56FE\u7247\u5207\u6362\u7F29\u653E"}`;
+    imageLightbox.hidden = false;
+    applyImageLightboxLayout();
+  }
+  function closeImageLightbox() {
+    if (imageLightbox.hidden) {
+      return;
+    }
+    imageLightbox.hidden = true;
+    setImageLightboxZoomed(false);
+    imageLightboxFrame.scrollTop = 0;
+    imageLightboxFrame.scrollLeft = 0;
+    activeImageLightboxAttachment = null;
+    imageLightboxImg.removeAttribute("src");
+    imageLightboxImg.alt = "";
+    imageLightboxCaption.textContent = "";
+    clearLightboxImageStyle("width");
+    clearLightboxImageStyle("height");
+    clearLightboxImageStyle("max-width");
+    clearLightboxImageStyle("max-height");
+    clearLightboxImageStyle("min-width");
+    clearLightboxImageStyle("min-height");
+    clearLightboxImageStyle("object-fit");
+  }
+  function clearMentionSearchTimer() {
+    if (mentionSearchTimer) {
+      window.clearTimeout(mentionSearchTimer);
+      mentionSearchTimer = null;
+    }
+  }
+  function hideFileMentionPalette() {
+    clearMentionSearchTimer();
+    activeMention = null;
+    fileMentionPalette.hide();
+  }
+  function getActiveMentionCandidate() {
+    if (messageInput.selectionStart !== messageInput.selectionEnd) return null;
+    const caretPos = messageInput.selectionStart ?? messageInput.value.length;
+    const beforeCaret = messageInput.value.slice(0, caretPos);
+    const atIndex = beforeCaret.lastIndexOf("@");
+    if (atIndex < 0) return null;
+    const previousChar = atIndex === 0 ? "" : beforeCaret[atIndex - 1];
+    if (previousChar && /[A-Za-z0-9_./\\%+-]/.test(previousChar)) return null;
+    const query = beforeCaret.slice(atIndex + 1);
+    if (/\s/.test(query)) return null;
+    return {
+      query,
+      tokenStart: atIndex,
+      tokenEnd: caretPos
+    };
+  }
+  function applyInputValue(nextValue, caretPos) {
+    messageInput.value = nextValue;
+    autoResizeInput(true);
+    messageInput.focus();
+    messageInput.setSelectionRange(caretPos, caretPos);
+    updateFakeCaret();
+  }
+  function removeMentionToken(text, mention) {
+    const before = text.slice(0, mention.tokenStart);
+    const after = text.slice(mention.tokenEnd);
+    let nextText = before + after;
+    let caretPos = before.length;
+    const needsJoinSpace = before && after && !/\s$/.test(before) && !/^\s/.test(after);
+    if (needsJoinSpace) {
+      nextText = `${before} ${after}`;
+      caretPos = before.length + 1;
+    }
+    if (before.endsWith(" ") && after.startsWith(" ")) {
+      nextText = before + after.slice(1);
+    }
+    return {
+      text: nextText,
+      caretPos
+    };
+  }
+  async function searchProjectFilesForMention(mention) {
+    const currentSeq = ++mentionSearchSeq;
+    activeMention = mention;
+    cmdPalette.hide();
+    fileMentionPalette.showLoading(mention.query);
+    clearMentionSearchTimer();
+    mentionSearchTimer = window.setTimeout(async () => {
+      try {
+        let items = [];
+        try {
+          const payload = await callLocalJson("/app/project-files", {
+            params: {
+              query: mention.query,
+              limit: 20
+            }
+          });
+          items = Array.isArray(payload?.items) ? payload.items : [];
+        } catch {
+          const result = await app.callServerTool({
+            name: "xiaohaha_search_project_files",
+            arguments: {
+              query: mention.query,
+              limit: 20
+            }
+          }, {
+            timeout: LOCAL_HTTP_TIMEOUT_MS
+          });
+          items = Array.isArray(result?.structuredContent?.items) ? result.structuredContent.items : [];
+        }
+        if (currentSeq !== mentionSearchSeq) return;
+        fileMentionPalette.showItems(items, mention.query);
+      } catch (error40) {
+        if (currentSeq !== mentionSearchSeq) return;
+        fileMentionPalette.hide();
+        uiState.error = error40 instanceof Error ? error40.message : "\u641C\u7D22\u9879\u76EE\u6587\u4EF6\u5931\u8D25";
+        render();
+      }
+    }, mention.query ? FILE_MENTION_SEARCH_DEBOUNCE_MS : 0);
+  }
+  function refreshInlinePalettes() {
+    const mention = getActiveMentionCandidate();
+    if (mention) {
+      void searchProjectFilesForMention(mention);
+      return;
+    }
+    mentionSearchSeq++;
+    hideFileMentionPalette();
+    cmdPalette.handleInputChange(messageInput.value);
+  }
+  async function attachMentionedProjectFile(item) {
+    const mention = activeMention;
+    mentionSearchSeq++;
+    hideFileMentionPalette();
+    if (!item?.path || !mention) return;
+    try {
+      let file2 = null;
+      try {
+        const payload = await callLocalJson("/app/project-file", {
+          params: {
+            path: item.path
+          },
+          timeoutMs: LOCAL_SEND_TIMEOUT_MS
+        });
+        if (!payload?.ok) {
+          throw new Error(payload?.error || "\u8BFB\u53D6\u6587\u4EF6\u5931\u8D25");
+        }
+        file2 = payload;
+      } catch {
+        const result = await app.callServerTool({
+          name: "xiaohaha_read_project_file",
+          arguments: {
+            file_path: item.path
+          }
+        }, {
+          timeout: LOCAL_SEND_TIMEOUT_MS
+        });
+        file2 = result?.structuredContent;
+        if (result?.isError || !file2?.ok) {
+          throw new Error(file2?.error || "\u8BFB\u53D6\u6587\u4EF6\u5931\u8D25");
+        }
+      }
+      attachments.addProjectFile(file2);
+      const nextInput = removeMentionToken(messageInput.value, mention);
+      applyInputValue(nextInput.text, nextInput.caretPos);
+      uiState.error = "";
+      render();
+    } catch (error40) {
+      uiState.error = error40 instanceof Error ? error40.message : "\u8BFB\u53D6\u6587\u4EF6\u5931\u8D25";
+      render();
+      messageInput.focus();
+    }
   }
   function buildLocalUrl(pathname, params) {
     if (!BROWSER_CHAT_BASE_URL) {
@@ -14992,6 +15687,129 @@ ${att.content}
     } finally {
       window.clearTimeout(timeoutId);
     }
+  }
+  async function uploadLocalAttachment({ type, name, mimeType, size, path, lineRef, encoding, body }) {
+    const url2 = buildLocalUrl("/app/attachments", {
+      type,
+      name: name || void 0,
+      mimeType: mimeType || void 0,
+      size: Number.isFinite(size) ? size : void 0,
+      path: path || void 0,
+      lineRef: lineRef || void 0,
+      encoding: encoding || void 0
+    });
+    if (!url2) {
+      throw new Error("\u672C\u5730\u9644\u4EF6\u670D\u52A1\u4E0D\u53EF\u7528");
+    }
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), LOCAL_UPLOAD_TIMEOUT_MS);
+    try {
+      const response = await fetch(url2.toString(), {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=UTF-8" },
+        body,
+        signal: controller.signal
+      });
+      let payload = {};
+      try {
+        payload = await response.json();
+      } catch {
+        payload = {};
+      }
+      if (!response.ok || payload?.ok === false || !payload?.attachment) {
+        const errorMessage = typeof payload?.error === "string" && payload.error.trim() ? payload.error.trim() : `HTTP ${response.status}`;
+        throw new Error(errorMessage);
+      }
+      return payload.attachment;
+    } catch (error40) {
+      if (error40?.name === "AbortError") {
+        throw new Error("\u9644\u4EF6\u4E0A\u4F20\u8D85\u65F6");
+      }
+      throw error40;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }
+  async function readClipboardImageFromLocalService() {
+    const payload = await callLocalJson("/app/clipboard-image", {
+      timeoutMs: LOCAL_SEND_TIMEOUT_MS
+    });
+    const image = payload?.image;
+    if (!image?.ok || typeof image?.base64 !== "string") {
+      throw new Error("\u526A\u8D34\u677F\u56FE\u7247\u4E0D\u53EF\u7528");
+    }
+    return {
+      type: "image",
+      name: "clipboard.png",
+      mimeType: typeof image.mimeType === "string" ? image.mimeType : "image/png",
+      size: Number(image.byteLength) || 0,
+      pixelWidth: Number(image.pixelWidth) || 0,
+      pixelHeight: Number(image.pixelHeight) || 0,
+      previewSource: "clipboard-service",
+      content: `data:${typeof image.mimeType === "string" ? image.mimeType : "image/png"};base64,${image.base64}`
+    };
+  }
+  function readImageDimensions(dataUrl) {
+    return new Promise((resolve) => {
+      const probe = new Image();
+      probe.onload = () => {
+        resolve({
+          pixelWidth: probe.naturalWidth || 0,
+          pixelHeight: probe.naturalHeight || 0
+        });
+      };
+      probe.onerror = () => {
+        resolve({
+          pixelWidth: 0,
+          pixelHeight: 0
+        });
+      };
+      probe.src = dataUrl;
+    });
+  }
+  async function buildImageAttachmentFromFile(file2, previewSource) {
+    const content = await readAsDataUrl(file2);
+    const { pixelWidth, pixelHeight } = await readImageDimensions(content);
+    return {
+      type: "image",
+      name: file2.name || "image.png",
+      mimeType: file2.type || "image/png",
+      size: Number(file2.size) || 0,
+      pixelWidth,
+      pixelHeight,
+      previewSource,
+      content
+    };
+  }
+  function getImageAttachmentArea(att) {
+    const width = Number(att?.pixelWidth) || 0;
+    const height = Number(att?.pixelHeight) || 0;
+    return width * height;
+  }
+  function choosePreferredImageAttachment(primaryAttachment, fallbackAttachment) {
+    if (!fallbackAttachment?.content) {
+      return primaryAttachment;
+    }
+    const primaryArea = getImageAttachmentArea(primaryAttachment);
+    const fallbackArea = getImageAttachmentArea(fallbackAttachment);
+    if (fallbackArea > primaryArea * 1.08) {
+      return {
+        ...fallbackAttachment,
+        name: primaryAttachment?.name || fallbackAttachment.name
+      };
+    }
+    if (primaryArea > fallbackArea * 1.08) {
+      return primaryAttachment;
+    }
+    const primarySize = Number(primaryAttachment?.size) || 0;
+    const fallbackSize = Number(fallbackAttachment?.size) || 0;
+    if (fallbackSize > primarySize * 1.2) {
+      return {
+        ...fallbackAttachment,
+        name: primaryAttachment?.name || fallbackAttachment.name
+      };
+    }
+    return primaryAttachment;
   }
   async function openBrowserChat() {
     if (!BROWSER_CHAT_BASE_URL) {
@@ -15063,12 +15881,10 @@ ${att.content}
   function extractPromptStateFromToolResult(result) {
     const textBlocks = Array.isArray(result?.content) ? result.content.filter((item) => item?.type === "text" && typeof item.text === "string") : [];
     const combinedText = textBlocks.map((item) => item.text).join("\n");
-    if (!combinedText) return { conversationId: "", previewMessage: "" };
+    if (!combinedText) return { conversationId: "" };
     const conversationMatch = combinedText.match(/当前会话 conversation_id:\s*(.+)/);
-    const previewMatch = combinedText.match(/用户发来新消息:\s*([\s\S]*?)\n\n请根据上述消息继续工作/);
     return {
-      conversationId: conversationMatch?.[1]?.trim() || "",
-      previewMessage: previewMatch?.[1]?.trim() || ""
+      conversationId: conversationMatch?.[1]?.trim() || ""
     };
   }
   async function refreshStateFromLocalHttp() {
@@ -15092,23 +15908,27 @@ ${att.content}
     });
     return extractState(result);
   }
-  async function sendAppMessageViaLocalHttp(message) {
+  async function sendAppMessageViaLocalHttp(message, previewMessage, attachmentsList) {
     const payload = await callLocalJson("/send", {
       method: "POST",
       timeoutMs: LOCAL_SEND_TIMEOUT_MS,
       body: {
         message,
+        previewMessage: previewMessage || void 0,
+        attachments: attachmentsList || void 0,
         instanceId: uiState.instanceId || void 0,
         conversationId: uiState.conversationId || void 0
       }
     });
     return normalizeState(payload?.state);
   }
-  async function sendAppMessageViaServerTool(message) {
+  async function sendAppMessageViaServerTool(message, previewMessage, attachmentsList) {
     const result = await app.callServerTool({
       name: "xiaohaha_send_app_message",
       arguments: {
         message,
+        preview_message: previewMessage || void 0,
+        attachments: attachmentsList || void 0,
         instance_id: uiState.instanceId || void 0,
         conversation_id: uiState.conversationId || void 0
       }
@@ -15159,6 +15979,8 @@ ${att.content}
     render();
   }
   function executeCommand(cmdId) {
+    mentionSearchSeq++;
+    hideFileMentionPalette();
     const matchedCmd = SLASH_COMMANDS.find((c) => c.id === cmdId) || { id: cmdId, hostCommand: null };
     cmdPalette.hide();
     messageInput.value = "";
@@ -15200,10 +16022,11 @@ ${att.content}
     }
   }
   async function sendMessage() {
+    mentionSearchSeq++;
+    hideFileMentionPalette();
     const rawText = messageInput.value.trim();
     if (!rawText && attachments.length === 0) return;
     if (uiState.sending) return;
-    const fullMessage = attachments.buildFullMessage(rawText);
     const previewText = attachments.buildPreviewText(rawText);
     uiState.sending = true;
     uiState.error = "";
@@ -15216,7 +16039,14 @@ ${att.content}
     uiState.latestAiMessage = "";
     render();
     try {
-      const nextState = await sendAppMessageViaLocalHttp(fullMessage).catch(() => sendAppMessageViaServerTool(fullMessage));
+      let nextState = null;
+      try {
+        const attachmentRefs = await attachments.prepareAttachmentRefs(uploadLocalAttachment);
+        nextState = await sendAppMessageViaLocalHttp(rawText, previewText, attachmentRefs).catch(() => sendAppMessageViaServerTool(rawText, previewText, attachmentRefs));
+      } catch {
+        const legacyMessage = attachments.buildFullMessage(rawText);
+        nextState = await sendAppMessageViaLocalHttp(legacyMessage, previewText).catch(() => sendAppMessageViaServerTool(legacyMessage, previewText));
+      }
       if (nextState) {
         uiState.conversationId = nextState.conversationId || uiState.conversationId;
         uiState.anyWaiting = nextState.anyWaiting;
@@ -15258,6 +16088,37 @@ ${att.content}
   });
   messageInput.addEventListener("keydown", (e) => {
     if (e.isComposing || isComposing || e.keyCode === 229) return;
+    if (e.key === "Escape" && isImageLightboxOpen()) {
+      e.preventDefault();
+      closeImageLightbox();
+      return;
+    }
+    if (fileMentionPalette.visible) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        fileMentionPalette.moveSelection(1);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        fileMentionPalette.moveSelection(-1);
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        const item = fileMentionPalette.getSelectedItem();
+        if (item) {
+          void attachMentionedProjectFile(item);
+        }
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        mentionSearchSeq++;
+        hideFileMentionPalette();
+        return;
+      }
+    }
     if (cmdPalette.visible) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -15300,17 +16161,59 @@ ${att.content}
       void sendMessage();
     }
   });
+  imageLightboxClose.addEventListener("click", () => {
+    closeImageLightbox();
+  });
+  imageLightbox.addEventListener("click", (e) => {
+    if (e.target === imageLightbox) {
+      closeImageLightbox();
+    }
+  });
+  imageLightboxImg.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setImageLightboxZoomed(!isImageLightboxZoomed);
+  });
+  imageLightboxImg.addEventListener("load", () => {
+    applyImageLightboxLayout();
+  });
+  window.addEventListener("resize", () => {
+    if (isImageLightboxOpen()) {
+      applyImageLightboxLayout();
+    }
+  });
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && isImageLightboxOpen()) {
+      e.preventDefault();
+      closeImageLightbox();
+    }
+  });
   messageInput.addEventListener("compositionstart", () => {
     isComposing = true;
   });
   messageInput.addEventListener("compositionend", () => {
     isComposing = false;
     autoResizeInput(true);
+    refreshInlinePalettes();
   });
   messageInput.addEventListener("input", () => {
     autoResizeInput();
-    cmdPalette.handleInputChange(messageInput.value);
+    refreshInlinePalettes();
     updateFakeCaret();
+  });
+  messageInput.addEventListener("click", () => {
+    refreshInlinePalettes();
+  });
+  messageInput.addEventListener("keyup", (e) => {
+    if (fileMentionPalette.visible && ["ArrowUp", "ArrowDown"].includes(e.key)) {
+      return;
+    }
+    if (cmdPalette.visible && ["ArrowUp", "ArrowDown"].includes(e.key)) {
+      return;
+    }
+    if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+      refreshInlinePalettes();
+    }
   });
   messageInput.addEventListener("focus", () => {
     updateFakeCaret();
@@ -15322,18 +16225,62 @@ ${att.content}
     const cd = e.clipboardData;
     if (!cd) return;
     const items = cd.items ? [...cd.items] : [];
+    const pastedFiles = cd.files ? [...cd.files].filter(Boolean) : [];
+    const pastedImageFiles = pastedFiles.filter((file2) => file2.type.startsWith("image/"));
     const imageItems = items.filter((item) => item.type.startsWith("image/"));
-    if (imageItems.length > 0) {
+    if (pastedImageFiles.length > 0 || imageItems.length > 0) {
       e.preventDefault();
-      const files = imageItems.map((item) => item.getAsFile()).filter(Boolean);
-      await attachments.processFiles(files);
+      mentionSearchSeq++;
+      hideFileMentionPalette();
+      try {
+        const directImageFiles = pastedImageFiles.length > 0 ? pastedImageFiles : imageItems.map((item) => item.getAsFile()).filter(Boolean);
+        if (directImageFiles.length > 1) {
+          await attachments.processFiles(directImageFiles);
+          updateFakeCaret();
+          return;
+        }
+        if (directImageFiles.length === 1) {
+          const primaryAttachment = await buildImageAttachmentFromFile(
+            directImageFiles[0],
+            pastedImageFiles.length > 0 ? "paste-file" : "paste-item"
+          );
+          let finalAttachment = primaryAttachment;
+          try {
+            const clipboardAttachment = await readClipboardImageFromLocalService();
+            finalAttachment = choosePreferredImageAttachment(primaryAttachment, clipboardAttachment);
+          } catch {
+          }
+          attachments.add(finalAttachment);
+          updateFakeCaret();
+          return;
+        }
+        attachments.add(await readClipboardImageFromLocalService());
+      } catch {
+        const fallbackFiles = pastedImageFiles.length > 0 ? pastedImageFiles : imageItems.map((item) => item.getAsFile()).filter(Boolean);
+        if (fallbackFiles.length > 0) {
+          await attachments.processFiles(fallbackFiles);
+        }
+      }
       updateFakeCaret();
       return;
+    }
+    if (pastedFiles.length > 0) {
+      const hasBinary = pastedFiles.some((file2) => !file2.type.startsWith("text/"));
+      if (hasBinary) {
+        e.preventDefault();
+        mentionSearchSeq++;
+        hideFileMentionPalette();
+        await attachments.processFiles(pastedFiles);
+        updateFakeCaret();
+        return;
+      }
     }
     const rawText = cd.getData("text/plain");
     const metaJson = cd.getData("application/vnd.code.copymetadata");
     if (metaJson && rawText) {
       e.preventDefault();
+      mentionSearchSeq++;
+      hideFileMentionPalette();
       attachments.processCodeMeta(metaJson, rawText);
       return;
     }
@@ -15342,12 +16289,16 @@ ${att.content}
     );
     if (metaItem && rawText) {
       e.preventDefault();
+      mentionSearchSeq++;
+      hideFileMentionPalette();
       metaItem.getAsString((json2) => attachments.processCodeMeta(json2, rawText));
       return;
     }
     const vsData = cd.getData("vscode-editor-data");
     if (vsData && rawText && (rawText.includes("\n") || rawText.length > 80)) {
       e.preventDefault();
+      mentionSearchSeq++;
+      hideFileMentionPalette();
       let lang = "text";
       try {
         lang = JSON.parse(vsData)?.mode || "text";
@@ -15386,11 +16337,13 @@ ${att.content}
       }
       return;
     }
-    if (cd.files && cd.files.length > 0) {
-      const nonText = [...cd.files].filter((f) => !f.type.startsWith("text/"));
+    if (pastedFiles.length > 0) {
+      const nonText = pastedFiles.filter((f) => !f.type.startsWith("text/"));
       if (nonText.length > 0) {
         e.preventDefault();
-        await attachments.processFiles(cd.files);
+        mentionSearchSeq++;
+        hideFileMentionPalette();
+        await attachments.processFiles(pastedFiles);
       }
     }
   });
@@ -15422,6 +16375,8 @@ ${att.content}
     dragCounter = 0;
     dragOverlay.hidden = true;
     inputShell.classList.remove("xh-drag-active");
+    mentionSearchSeq++;
+    hideFileMentionPalette();
     if (e.dataTransfer?.files?.length > 0) {
       await attachments.processFiles(e.dataTransfer.files);
       messageInput.focus();
@@ -15456,6 +16411,8 @@ ${att.content}
   attachImageBtn.addEventListener("click", () => imageInput.click());
   fileInput.addEventListener("change", () => {
     if (fileInput.files.length > 0) {
+      mentionSearchSeq++;
+      hideFileMentionPalette();
       const files = [...fileInput.files];
       fileInput.value = "";
       void attachments.processFiles(files).finally(() => updateFakeCaret());
@@ -15463,12 +16420,18 @@ ${att.content}
   });
   imageInput.addEventListener("change", () => {
     if (imageInput.files.length > 0) {
+      mentionSearchSeq++;
+      hideFileMentionPalette();
       const files = [...imageInput.files];
       imageInput.value = "";
       void attachments.processFiles(files).finally(() => updateFakeCaret());
     }
   });
   document.addEventListener("click", (e) => {
+    if (fileMentionPalette.visible && !fileMentionPalette.contains(e.target) && e.target !== messageInput) {
+      mentionSearchSeq++;
+      hideFileMentionPalette();
+    }
     if (cmdPalette.visible && !cmdPalette.el.contains(e.target) && e.target !== messageInput) {
       cmdPalette.hide();
     }
@@ -15496,14 +16459,6 @@ ${att.content}
   app.ontoolresult = (result) => {
     const nextState = extractPromptStateFromToolResult(result);
     uiState.conversationId = nextState.conversationId || uiState.conversationId;
-    if (nextState.previewMessage) {
-      uiState.anyWaiting = false;
-      uiState.waiting = false;
-      uiState.activeTool = false;
-      uiState.completedTool = true;
-      uiState.submittedMessage = nextState.previewMessage;
-      uiState.submittedAt = "";
-    }
     void refreshState().catch(() => render());
   };
   app.ontoolcancelled = () => {

@@ -31,7 +31,25 @@ const stderrPath = path.join(logsDir, "xiaohaha-mcp.err.log");
 const launchDomain = `gui/${process.getuid()}`;
 const launchTarget = `${launchDomain}/${SERVICE_LABEL}`;
 const runtimeServerEntryPath = path.join(runtimeDir, "server.js");
+const workspaceMirrorDir = path.join(runtimeDir, "workspace");
 const runtimeSources = ["server.js", "package.json", "src", "app", "node_modules"];
+const mirrorSkipNames = new Set([
+  ".git",
+  "node_modules",
+  "dist",
+  ".next",
+  "build",
+  "coverage",
+  "__pycache__",
+  ".cache",
+  ".turbo",
+  "vendor",
+  ".output",
+]);
+const mirrorSkipPrefixes = [
+  ".xiaohaha-state.",
+  ".xiaohaha-http.",
+];
 
 function xmlEscape(value) {
   return String(value)
@@ -111,6 +129,10 @@ function buildPlist() {
       <string>${xmlEscape(HOST)}</string>
       <key>XIAOHAHA_MCP_PORT</key>
       <string>${xmlEscape(PORT)}</string>
+      <key>XIAOHAHA_PROJECT_ROOT</key>
+      <string>${xmlEscape(PROJECT_ROOT)}</string>
+      <key>XIAOHAHA_WORKSPACE_ROOT</key>
+      <string>${xmlEscape(workspaceMirrorDir)}</string>
       <key>XIAOHAHA_HOME</key>
       <string>${xmlEscape(dataDir)}</string>
     </dict>
@@ -153,6 +175,28 @@ function syncRuntimeFiles() {
       recursive: true,
     });
   }
+
+  fs.mkdirSync(workspaceMirrorDir, { recursive: true });
+  fs.cpSync(PROJECT_ROOT, workspaceMirrorDir, {
+    recursive: true,
+    filter: (sourcePath) => {
+      const relPath = path.relative(PROJECT_ROOT, sourcePath);
+      if (!relPath || relPath === "") return true;
+
+      const normalized = relPath.split(path.sep).join("/");
+      const segments = normalized.split("/").filter(Boolean);
+      const baseName = path.basename(sourcePath);
+
+      if (segments.some((segment) => mirrorSkipNames.has(segment))) {
+        return false;
+      }
+      if (mirrorSkipPrefixes.some((prefix) => baseName.startsWith(prefix))) {
+        return false;
+      }
+
+      return true;
+    },
+  });
 }
 
 function copyIfMissing(sourcePath, targetPath) {
@@ -197,6 +241,7 @@ function start() {
   ensureInstalled();
   ensureNoConflictingListener();
   syncRuntimeFiles();
+  writePlist();
 
   if (!isServiceLoaded()) {
     runLaunchctl(["bootstrap", launchDomain, plistPath]);
@@ -227,6 +272,7 @@ function restart() {
 
   ensureNoConflictingListener();
   syncRuntimeFiles();
+  writePlist();
   runLaunchctl(["bootstrap", launchDomain, plistPath]);
   runLaunchctl(["kickstart", "-k", launchTarget]);
   console.log(`[xiaohaha-mcp] Service restarted: ${SERVICE_LABEL}`);
