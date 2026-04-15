@@ -451,25 +451,42 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
     const event = typeof payload.event === "string" ? payload.event : "unknown";
     const conversationId = payload.conversationId || payload.conversation_id || "";
     const instanceId = payload.instanceId || payload.instance_id || "";
+    const routeHint = typeof payload.routeHint === "string"
+      ? payload.routeHint
+      : typeof payload.route_hint === "string"
+        ? payload.route_hint
+        : "";
+    const resourceUri = typeof payload.resourceUri === "string"
+      ? payload.resourceUri
+      : typeof payload.resource_uri === "string"
+        ? payload.resource_uri
+        : "";
     recordDiagnostic("app_view_event", {
       event,
       conversationId,
       instanceId,
+      routeHint,
+      resourceUri,
       detail: payload.detail && typeof payload.detail === "object" ? payload.detail : {},
     });
 
-    if ((event === "ui_tool_input" || event === "ui_host_context_changed") && instanceId) {
+    if (event === "ui_tool_input" && instanceId) {
       const session = sessionService.resolveSession({
         conversationId,
         instanceId,
+        aiResponseHint: routeHint,
         allowClientSessionFallback: false,
       });
       if (session) {
-        sessionService.bindAppInstanceToSession(session, instanceId);
+        sessionService.bindAppInstanceToSession(session, instanceId, {
+          resourceUri,
+          routeHint,
+        });
         recordDiagnostic("app_view_bound_from_http_log", {
           event,
           conversationId: session.conversationId,
           instanceId,
+          resourceUri,
         });
       }
     }

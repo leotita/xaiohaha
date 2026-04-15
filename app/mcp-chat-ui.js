@@ -34,6 +34,16 @@ const LOCAL_SEND_TIMEOUT_MS = 8000;
 const LOCAL_UPLOAD_TIMEOUT_MS = 20000;
 const LOCAL_DIAGNOSTIC_TIMEOUT_MS = 1500;
 const FILE_MENTION_SEARCH_DEBOUNCE_MS = 60;
+const CURRENT_APP_RESOURCE_URI = (() => {
+  if (typeof window.__XIAOHAHA_APP_RESOURCE_URI === "string" && window.__XIAOHAHA_APP_RESOURCE_URI.trim()) {
+    return window.__XIAOHAHA_APP_RESOURCE_URI.trim();
+  }
+  try {
+    return String(window.location.href || "").split("#")[0] || "";
+  } catch {
+    return "";
+  }
+})();
 
 /* ═══════════════════════════════════════════════════
    DOM Setup
@@ -54,8 +64,8 @@ if (needsFullDom) {
   root.innerHTML = `
     <div class="xh-root">
       <div class="xh-preview" id="sentPreview" hidden></div>
-      <div class="xh-composer-layer" id="composerLayer">
-        <form class="xh-form" id="composerForm">
+      <div class="xh-composer-layer" id="composerLayer" hidden>
+        <form class="xh-form" id="composerForm" hidden>
           <div class="xh-input-shell" id="inputShell">
             <div class="xh-cmd-palette xh-file-palette" id="fileMentionPalette" hidden></div>
             <div class="xh-cmd-palette" id="cmdPalette" hidden></div>
@@ -104,6 +114,7 @@ if (needsFullDom) {
 }
 
 const composerForm = document.getElementById("composerForm");
+const composerLayer = document.getElementById("composerLayer");
 const messageInput = document.getElementById("messageInput");
 const sentPreview = document.getElementById("sentPreview");
 const errorBanner = document.getElementById("errorBanner");
@@ -123,6 +134,18 @@ const imageLightboxImg = document.getElementById("imageLightboxImg");
 const imageLightboxCaption = document.getElementById("imageLightboxCaption");
 const imageLightboxClose = document.getElementById("imageLightboxClose");
 
+// 宿主在切换/复用 iframe 时，旧 DOM 可能会先保留下来。
+// 这里在任何异步初始化之前，先把所有瞬态交互层收起，避免历史卡片在首帧闪出 composer。
+composerLayer.hidden = true;
+composerForm.hidden = true;
+sentPreview.hidden = true;
+errorBanner.hidden = true;
+attachmentBar.hidden = true;
+fakeCaret.hidden = true;
+dragOverlay.hidden = true;
+imageLightbox.hidden = true;
+inputShell.classList.remove("xh-pseudo-focus");
+
 /* ═══════════════════════════════════════════════════
    MCP App + State
    ═══════════════════════════════════════════════════ */
@@ -131,6 +154,7 @@ const app = new App({ name: "xiaohaha-chat-ui", version: "1.0.8" }, {}, { autoRe
 
 const uiState = {
   connected: false,
+  hydrated: false,
   instanceId: "",
   conversationId: "",
   routeHint: "",
@@ -153,6 +177,11 @@ let isImageLightboxZoomed = false;
 let activeImageLightboxAttachment = null;
 let sizeSyncScheduled = false;
 let lastSyncedSize = { width: 0, height: 0 };
+let lastRenderedComposerVisible = false;
+let teardownRequested = false;
+let teardownCompleted = false;
+let acceptedToolInputForInstance = false;
+let historicalViewFrozen = false;
 
 function installRichInputBridge(editorEl) {
   let disabled = false;
@@ -315,9 +344,117 @@ function scheduleSizeSync() {
   });
 }
 
+function scheduleCollapseSizeSyncBurst() {
+  flushSizeSync();
+  window.requestAnimationFrame(() => {
+    flushSizeSync();
+  });
+  window.setTimeout(() => {
+    flushSizeSync();
+  }, 32);
+}
+
 function shouldShowComposer() {
-  // 只有当前活动视图需要持续展示输入框；历史卡片在同一会话继续等待时也应保持收起。
-  return uiState.sending || (uiState.isCurrentView && (uiState.anyWaiting || (uiState.activeTool && !uiState.completedTool)));
+  // 用户一旦在当前卡片发出消息，就让这张卡片只保留预览，不再继续展示输入框；
+  // 下一轮新的 check_messages 卡片出现后，再由新卡片承接 composer，避免历史卡片闪动。
+  return uiState.isCurrentView && (
+    uiState.sending
+    || (uiState.waiting && !uiState.submittedMessage)
+  );
+}
+
+function shouldTeardownHistoricalView() {
+  return uiState.connected
+    && uiState.completedTool
+    && uiState.anyWaiting
+    && !uiState.isCurrentView
+    && !uiState.sending
+    && !teardownRequested
+    && !teardownCompleted;
+}
+
+function shouldFreezeHistoricalView() {
+  return uiState.connected
+    && uiState.completedTool
+    && Boolean(uiState.submittedMessage)
+    && uiState.anyWaiting
+    && !uiState.isCurrentView
+    && !uiState.sending;
+}
+
+function freezeHistoricalView(source) {
+  if (historicalViewFrozen) {
+    return;
+  }
+
+  historicalViewFrozen = true;
+  if (pollTimer) {
+    window.clearInterval(pollTimer);
+    pollTimer = null;
+  }
+
+  uiState.waiting = false;
+  uiState.activeTool = false;
+  uiState.isCurrentView = false;
+  render();
+  reportDiagnosticsEvent("ui_historical_view_frozen", {
+    source,
+    conversationId: uiState.conversationId || "",
+    instanceId: uiState.instanceId || "",
+  });
+}
+
+function freezeSubmittedView(source) {
+  if (historicalViewFrozen) {
+    return;
+  }
+
+  historicalViewFrozen = true;
+  if (pollTimer) {
+    window.clearInterval(pollTimer);
+    pollTimer = null;
+  }
+
+  uiState.waiting = false;
+  uiState.activeTool = false;
+  uiState.isCurrentView = false;
+  uiState.sending = false;
+  render();
+  reportDiagnosticsEvent("ui_submitted_view_frozen", {
+    source,
+    conversationId: uiState.conversationId || "",
+    instanceId: uiState.instanceId || "",
+  });
+}
+
+function maybeRequestHistoricalTeardown(source) {
+  if (!shouldTeardownHistoricalView()) {
+    if (uiState.isCurrentView) {
+      teardownRequested = false;
+    }
+    return;
+  }
+
+  teardownRequested = true;
+  reportDiagnosticsEvent("ui_request_teardown_started", {
+    source,
+    conversationId: uiState.conversationId || "",
+    instanceId: uiState.instanceId || "",
+  });
+
+  void app.requestTeardown().then(() => {
+    reportDiagnosticsEvent("ui_request_teardown_sent", {
+      source,
+      conversationId: uiState.conversationId || "",
+      instanceId: uiState.instanceId || "",
+    });
+  }).catch((error) => {
+    teardownRequested = false;
+    reportDiagnosticsEvent("ui_request_teardown_failed", {
+      source,
+      message: error instanceof Error ? error.message : "requestTeardown failed",
+    });
+  });
 }
 
 function updateFakeCaret() {
@@ -674,6 +811,8 @@ async function sendDiagnosticsEvent(event, detail = {}) {
     detail,
     instanceId: uiState.instanceId || undefined,
     conversationId: uiState.conversationId || undefined,
+    routeHint: uiState.routeHint || undefined,
+    resourceUri: CURRENT_APP_RESOURCE_URI || undefined,
   };
 
   try {
@@ -697,6 +836,8 @@ async function sendDiagnosticsEvent(event, detail = {}) {
         detail,
         instance_id: uiState.instanceId || undefined,
         conversation_id: uiState.conversationId || undefined,
+        route_hint: uiState.routeHint || undefined,
+        resource_uri: CURRENT_APP_RESOURCE_URI || undefined,
       },
     }, {
       timeout: LOCAL_DIAGNOSTIC_TIMEOUT_MS,
@@ -1014,8 +1155,10 @@ async function sendAppMessageViaServerTool(message, previewMessage, attachmentsL
    ═══════════════════════════════════════════════════ */
 
 function render() {
-  const showPreview = Boolean(uiState.submittedMessage);
-  const showComposer = shouldShowComposer();
+  const showPreview = uiState.hydrated && Boolean(uiState.submittedMessage);
+  const showComposer = uiState.hydrated && shouldShowComposer();
+  const composerCollapsed = lastRenderedComposerVisible && !showComposer;
+  composerLayer.hidden = !showComposer;
   composerForm.hidden = !showComposer;
   sentPreview.hidden = !showPreview;
   errorBanner.hidden = !uiState.error;
@@ -1032,7 +1175,12 @@ function render() {
   }
 
   updateFakeCaret();
-  scheduleSizeSync();
+  if (composerCollapsed) {
+    scheduleCollapseSizeSyncBurst();
+  } else {
+    scheduleSizeSync();
+  }
+  lastRenderedComposerVisible = showComposer;
 }
 
 /* ═══════════════════════════════════════════════════
@@ -1040,6 +1188,10 @@ function render() {
    ═══════════════════════════════════════════════════ */
 
 async function refreshState() {
+  if (historicalViewFrozen) {
+    return;
+  }
+
   let nextState = null;
   let localState = null;
   try {
@@ -1071,12 +1223,16 @@ async function refreshState() {
 
   const previewMessage = nextState.previewMessage.trim();
   uiState.connected = true;
+  uiState.hydrated = true;
   uiState.conversationId = nextState.conversationId || uiState.conversationId;
   uiState.anyWaiting = nextState.anyWaiting;
-  uiState.waiting = nextState.waiting;
+  uiState.waiting = nextState.waiting && nextState.isCurrentView;
   uiState.isCurrentView = nextState.isCurrentView;
-  if (nextState.waiting) {
-    uiState.activeTool = true;
+  uiState.activeTool = uiState.waiting;
+  if (!uiState.isCurrentView) {
+    uiState.waiting = false;
+    uiState.sending = false;
+    uiState.activeTool = false;
   }
   uiState.error = "";
   uiState.latestAiMessage = getLatestAiMessage(nextState.events);
@@ -1092,6 +1248,11 @@ async function refreshState() {
     uiState.submittedAt = "";
   }
   render();
+  if (shouldFreezeHistoricalView()) {
+    freezeHistoricalView("refresh_state");
+    return;
+  }
+  maybeRequestHistoricalTeardown("refresh_state");
 }
 
 /* ═══════════════════════════════════════════════════
@@ -1199,7 +1360,7 @@ async function sendMessage() {
     if (nextState) {
       uiState.conversationId = nextState.conversationId || uiState.conversationId;
       uiState.anyWaiting = nextState.anyWaiting;
-      uiState.waiting = nextState.waiting;
+      uiState.waiting = nextState.waiting && nextState.isCurrentView;
       uiState.isCurrentView = nextState.isCurrentView;
       uiState.latestAiMessage = getLatestAiMessage(nextState.events);
       const pm = nextState.previewMessage.trim();
@@ -1217,6 +1378,9 @@ async function sendMessage() {
     messageInput.value = "";
     attachments.clear();
     autoResizeInput();
+    if (uiState.submittedMessage) {
+      freezeSubmittedView("send_message_succeeded");
+    }
   } catch (error) {
     uiState.anyWaiting = true;
     uiState.waiting = true;
@@ -1675,19 +1839,91 @@ document.addEventListener("click", (e) => {
    App Lifecycle
    ═══════════════════════════════════════════════════ */
 
-app.onteardown = async () => { if (pollTimer) { window.clearInterval(pollTimer); pollTimer = null; } return {}; };
+app.onteardown = async () => {
+  teardownCompleted = true;
+  if (pollTimer) {
+    window.clearInterval(pollTimer);
+    pollTimer = null;
+  }
+  reportDiagnosticsEvent("ui_teardown", {
+    conversationId: uiState.conversationId || "",
+    instanceId: uiState.instanceId || "",
+  });
+  return {};
+};
 
 app.ontoolinput = (params) => {
-  uiState.anyWaiting = true; uiState.activeTool = true; uiState.waiting = true;
-  uiState.isCurrentView = true;
+  if (historicalViewFrozen) {
+    return;
+  }
+
+  const explicitConversationId = extractConversationIdFromArgs(params?.arguments);
+  const nextRouteHint = extractRouteHintFromArgs(params?.arguments) || uiState.latestAiMessage || uiState.routeHint;
+  const isRepeatedToolInput = acceptedToolInputForInstance && uiState.completedTool;
+  const isHistoricalProbe = uiState.completedTool && !explicitConversationId;
+  uiState.conversationId = explicitConversationId || uiState.conversationId;
+  uiState.routeHint = nextRouteHint;
+
+  if (isHistoricalProbe) {
+    uiState.anyWaiting = false;
+    uiState.waiting = false;
+    uiState.isCurrentView = false;
+    uiState.activeTool = false;
+    uiState.sending = false;
+    reportDiagnosticsEvent("ui_tool_input_ignored_historical", {
+      toolName: app.getHostContext()?.toolInfo?.tool?.name || "",
+      hasConversationId: false,
+      hasRouteHint: Boolean(uiState.routeHint),
+    });
+    render();
+    void refreshState().catch((err) => {
+      uiState.error = err instanceof Error ? err.message : "刷新失败";
+      reportDiagnosticsEvent("ui_refresh_failed", {
+        source: "tool_input_ignored_historical",
+        message: uiState.error,
+      });
+      render();
+    });
+    return;
+  }
+
+  if (isRepeatedToolInput) {
+    uiState.anyWaiting = false;
+    uiState.waiting = false;
+    uiState.isCurrentView = false;
+    uiState.activeTool = false;
+    uiState.sending = false;
+    reportDiagnosticsEvent("ui_tool_input_ignored_duplicate", {
+      toolName: app.getHostContext()?.toolInfo?.tool?.name || "",
+      hasConversationId: Boolean(uiState.conversationId),
+      hasRouteHint: Boolean(uiState.routeHint),
+    });
+    render();
+    void refreshState().catch((err) => {
+      uiState.error = err instanceof Error ? err.message : "刷新失败";
+      reportDiagnosticsEvent("ui_refresh_failed", {
+        source: "tool_input_ignored_duplicate",
+        message: uiState.error,
+      });
+      render();
+    });
+    return;
+  }
+
+  acceptedToolInputForInstance = true;
+  // 不在收到 tool_input 的瞬间乐观展开 composer，先等服务端确认这张卡片真的是当前等待中的那张。
+  uiState.hydrated = false;
+  uiState.anyWaiting = false;
+  uiState.activeTool = false;
+  uiState.waiting = false;
+  uiState.isCurrentView = false;
   uiState.completedTool = false; uiState.submittedMessage = ""; uiState.submittedAt = "";
-  uiState.conversationId = extractConversationIdFromArgs(params?.arguments) || uiState.conversationId;
-  uiState.routeHint = extractRouteHintFromArgs(params?.arguments) || uiState.latestAiMessage || uiState.routeHint;
   reportDiagnosticsEvent("ui_tool_input", {
     toolName: app.getHostContext()?.toolInfo?.tool?.name || "",
     hasConversationId: Boolean(uiState.conversationId),
     hasRouteHint: Boolean(uiState.routeHint),
   });
+  render();
   void refreshState().catch((err) => {
     uiState.error = err instanceof Error ? err.message : "刷新失败";
     reportDiagnosticsEvent("ui_refresh_failed", {
@@ -1699,16 +1935,30 @@ app.ontoolinput = (params) => {
 };
 
 app.ontoolresult = (result) => {
+  if (historicalViewFrozen) {
+    return;
+  }
+
   const stateFromResult = extractState(result);
   const nextState = extractPromptStateFromToolResult(result);
   if (stateFromResult) {
+    const resultPreviewMessage = stateFromResult.previewMessage.trim();
+    uiState.hydrated = true;
     uiState.anyWaiting = stateFromResult.anyWaiting;
-    uiState.waiting = stateFromResult.waiting;
+    uiState.waiting = stateFromResult.waiting && stateFromResult.isCurrentView;
     uiState.isCurrentView = stateFromResult.isCurrentView;
     uiState.latestAiMessage = getLatestAiMessage(stateFromResult.events) || uiState.latestAiMessage;
+    if (resultPreviewMessage) {
+      uiState.submittedMessage = resultPreviewMessage;
+    }
+    if (!uiState.isCurrentView) {
+      uiState.waiting = false;
+      uiState.sending = false;
+      uiState.activeTool = false;
+    }
   }
   uiState.conversationId = nextState.conversationId || uiState.conversationId;
-  uiState.waiting = stateFromResult?.waiting || false;
+  uiState.waiting = Boolean(stateFromResult?.waiting) && uiState.isCurrentView;
   uiState.activeTool = false;
   uiState.completedTool = true;
   reportDiagnosticsEvent("ui_tool_result", {
@@ -1719,6 +1969,7 @@ app.ontoolresult = (result) => {
     waiting: uiState.waiting,
     isCurrentView: uiState.isCurrentView,
   });
+  render();
   void refreshState().catch((err) => {
     reportDiagnosticsEvent("ui_refresh_failed", {
       source: "tool_result",
@@ -1726,9 +1977,14 @@ app.ontoolresult = (result) => {
     });
     render();
   });
+  maybeRequestHistoricalTeardown("tool_result");
 };
 
 app.ontoolcancelled = () => {
+  if (historicalViewFrozen) {
+    return;
+  }
+
   uiState.anyWaiting = false; uiState.waiting = false; uiState.activeTool = false;
   reportDiagnosticsEvent("ui_tool_cancelled", {
     toolName: app.getHostContext()?.toolInfo?.tool?.name || "",
@@ -1736,13 +1992,30 @@ app.ontoolcancelled = () => {
   render();
 };
 app.onhostcontextchanged = (hostContext) => {
+  if (historicalViewFrozen) {
+    return;
+  }
+
   const instanceChanged = syncHostContext(hostContext);
   reportDiagnosticsEvent("ui_host_context_changed", {
     toolName: hostContext?.toolInfo?.tool?.name || "",
     instanceChanged,
     instanceId: hostContext?.toolInfo?.id ?? "",
   });
-  if (instanceChanged && uiState.connected) {
+  if (uiState.connected) {
+    if (instanceChanged) {
+      acceptedToolInputForInstance = false;
+    }
+
+    // 宿主切换上下文时，历史卡片会先收到一轮 host_context_changed。
+    // 这里先把已完成卡片的 composer 本地收起，避免在 refreshState 修正前闪一下。
+    if (uiState.completedTool && !uiState.sending) {
+      uiState.waiting = false;
+      uiState.activeTool = false;
+      uiState.isCurrentView = false;
+    }
+
+    render();
     void refreshState().catch((err) => {
       reportDiagnosticsEvent("ui_refresh_failed", {
         source: "host_context_changed",
@@ -1752,7 +2025,9 @@ app.onhostcontextchanged = (hostContext) => {
     });
     return;
   }
+
   render();
+  maybeRequestHistoricalTeardown("host_context_changed");
 };
 
 /* ═══════════════════════════════════════════════════

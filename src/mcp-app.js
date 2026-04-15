@@ -3,10 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
+import { registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
+import { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import { BASE_ORIGIN, BASE_URL, CHAT_APP_URI, DEV_MODE, WORKSPACE_ROOT } from "./config.js";
+import { BASE_ORIGIN, BASE_URL, CHAT_APP_URI, CHAT_APP_URI_TEMPLATE, DEV_MODE, WORKSPACE_ROOT } from "./config.js";
 import { WAIT_RESOLUTIONS } from "./session-service.js";
 
 const execFileAsync = promisify(execFile);
@@ -777,7 +778,7 @@ async function loadChatAppBundle() {
   }
 }
 
-function buildChatAppHtml(bundle) {
+function buildChatAppHtml(bundle, resourceUri = "") {
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -845,6 +846,7 @@ function buildChatAppHtml(bundle) {
     </div>
   </div>
   <script>window.__XIAOHAHA_BROWSER_CHAT_URL = ${JSON.stringify(BASE_URL)};</script>
+  <script>window.__XIAOHAHA_APP_RESOURCE_URI = ${JSON.stringify(resourceUri)};</script>
   <script>window.__XIAOHAHA_WORKSPACE_ROOT = ${JSON.stringify(WORKSPACE_ROOT)};</script>
   <script>${escapeInlineScript(bundle)}</script>
 ${DEV_MODE ? `  <script>
@@ -860,6 +862,16 @@ ${DEV_MODE ? `  <script>
   </script>` : ""}
 </body>
 </html>`;
+}
+
+function buildCheckMessagesToolMeta(resourceUri) {
+  return {
+    ui: {
+      resourceUri,
+      visibility: ["model"],
+    },
+    "ui/resourceUri": resourceUri,
+  };
 }
 
 const IMAGE_MARKER_RE = /\[XIAOHAHA_IMG:(data:([^;]+);base64,([^\]]+))\]/g;
@@ -1116,7 +1128,7 @@ async function buildCheckMessagesPrompt(entry, conversationId, contextSummary, a
         contextBlock +
         `用户发来新消息:\n\n${renderedUserMessage}\n\n` +
         (images.length > 0 ? `(用户同时附加了 ${images.length} 张图片，见下方)\n\n` : "") +
-        `请根据上述消息继续工作。先在正常聊天流里直接回复用户，再调用 check_messages 工具，并保持传入同一个 conversation_id（${conversationId}）。调用 check_messages 时，将你刚刚已经回复给用户的同一份最终回复文本传入 ai_response 参数，不要只把回复放进 ai_response 而不在聊天中输出。`,
+        `请根据上述消息继续工作。先在正常聊天流里直接回复用户，再调用 check_messages 工具，并保持传入同一个 conversation_id（${conversationId}，不要留空、不要改写）。调用 check_messages 时，将你刚刚已经回复给用户的同一份最终回复文本传入 ai_response 参数，不要只把回复放进 ai_response 而不在聊天中输出。`,
     },
   ];
 
@@ -1128,7 +1140,19 @@ async function buildCheckMessagesPrompt(entry, conversationId, contextSummary, a
     });
   }
 
-  return { content };
+  return {
+    content,
+    structuredContent: {
+      state: {
+        conversationId,
+        anyWaiting: false,
+        waiting: false,
+        isCurrentView: false,
+        previewMessage: normalized.preview || "",
+        events: [],
+      },
+    },
+  };
 }
 
 function startCheckMessagesProgress(extra) {
@@ -1155,12 +1179,12 @@ function startCheckMessagesProgress(extra) {
 }
 
 export function registerChatAppIntegration(mcpServer, sessionService, attachmentStore, diagnostics) {
-  registerAppResource(
-    mcpServer,
+  mcpServer.registerResource(
     "Xiaohaha Chat UI",
-    CHAT_APP_URI,
+    new ResourceTemplate(CHAT_APP_URI_TEMPLATE, { list: undefined }),
     {
       description: "Embedded Xiaohaha follow-up chat UI.",
+      mimeType: RESOURCE_MIME_TYPE,
       _meta: {
         ui: {
           prefersBorder: false,
@@ -1170,18 +1194,19 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         },
       },
     },
-    async () => {
+    async (uri) => {
+      const resourceUri = uri.toString();
       recordIntegrationDiagnostic(diagnostics, "chat_ui_resource_read", {
-        resourceUri: CHAT_APP_URI,
+        resourceUri,
       });
       const bundle = await loadChatAppBundle();
 
       return {
         contents: [
           {
-            uri: CHAT_APP_URI,
+            uri: resourceUri,
             mimeType: RESOURCE_MIME_TYPE,
-            text: buildChatAppHtml(bundle),
+            text: buildChatAppHtml(bundle, resourceUri),
             _meta: {
               ui: {
                 prefersBorder: false,
@@ -1212,18 +1237,26 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
           .optional()
           .describe("Stable logical conversation id. Reuse the same value on every follow-up check_messages call in the same chat thread."),
       },
-      _meta: {
-        ui: {
-          resourceUri: CHAT_APP_URI,
-          visibility: ["model"],
-        },
-      },
+      _meta: buildCheckMessagesToolMeta(CHAT_APP_URI),
     },
     async ({ ai_response, conversation_id }, extra) => {
-      const session = sessionService.getOrCreateSession(conversation_id);
+      const activeAppResourceUri = CHAT_APP_URI;
+
+      const session = sessionService.resolveSession({
+        conversationId: conversation_id,
+        aiResponseHint: ai_response,
+        createIfMissing: true,
+        allowClientSessionFallback: false,
+      });
+
+      if (!session) {
+        throw new Error("Failed to resolve chat session for check_messages");
+      }
+
       const instanceId = extra.requestId;
       sessionService.bindToolInstanceToConversation(instanceId, session.conversationId);
-      sessionService.bindClientSessionToConversation(extra.sessionId, session.conversationId);
+      // 每次新的 check_messages 卡片出现时，都把它标成当前活动视图，避免旧卡片继续展示输入框。
+      sessionService.bindAppInstanceToSession(session, instanceId);
 
       recordIntegrationDiagnostic(diagnostics, "check_messages_called", {
         mcpSessionId: extra.sessionId || "",
@@ -1231,6 +1264,7 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         inputConversationId: conversation_id || "",
         conversationId: session.conversationId,
         hasAiResponse: Boolean(ai_response?.trim()),
+        resourceUri: activeAppResourceUri,
       });
 
       if (ai_response?.trim()) {
@@ -1260,7 +1294,13 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
           mcpSessionId: extra.sessionId || "",
         });
         const message = await Promise.race([
-          sessionService.waitForNextMessage(session, instanceId, extra.sessionId),
+          sessionService.waitForNextMessage(
+            session,
+            instanceId,
+            extra.sessionId,
+            activeAppResourceUri,
+            ai_response?.trim() || ""
+          ),
           new Promise((resolve) => {
             abortListener = () => {
               sessionService.resolveWaitingState(session, WAIT_RESOLUTIONS.REQUEST_ABORTED);
@@ -1289,6 +1329,17 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
                 text: "Cursor cancelled check_messages while waiting for the next message.",
               },
             ],
+            structuredContent: {
+              error: "Cursor cancelled check_messages while waiting for the next message.",
+              state: {
+                conversationId: session.conversationId,
+                anyWaiting: false,
+                waiting: false,
+                isCurrentView: false,
+                previewMessage: "",
+                events: [],
+              },
+            },
           };
         }
 
@@ -1305,6 +1356,17 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
                 text: "Cursor MCP session closed while waiting for the next message.",
               },
             ],
+            structuredContent: {
+              error: "Cursor MCP session closed while waiting for the next message.",
+              state: {
+                conversationId: session.conversationId,
+                anyWaiting: false,
+                waiting: false,
+                isCurrentView: false,
+                previewMessage: "",
+                events: [],
+              },
+            },
           };
         }
 
@@ -1353,9 +1415,8 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
       const state = sessionService.getChatState({
         conversationId: conversation_id,
         instanceId: instance_id,
-        clientSessionId: extra.sessionId,
         aiResponseHint: route_hint,
-        allowClientSessionFallback: true,
+        allowClientSessionFallback: false,
         bindInstance: false,
       });
 
@@ -1420,9 +1481,8 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
       const session = sessionService.resolveSession({
         conversationId: conversation_id,
         instanceId: instance_id,
-        clientSessionId: extra.sessionId,
         aiResponseHint: route_hint,
-        allowClientSessionFallback: true,
+        allowClientSessionFallback: false,
       });
 
       recordIntegrationDiagnostic(diagnostics, "app_send_tool_called", {
@@ -1438,9 +1498,8 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         const state = sessionService.getChatState({
           conversationId: conversation_id,
           instanceId: instance_id,
-          clientSessionId: extra.sessionId,
           aiResponseHint: route_hint,
-          allowClientSessionFallback: true,
+          allowClientSessionFallback: false,
           bindInstance: false,
         });
         recordIntegrationDiagnostic(diagnostics, "app_send_tool_failed", {
@@ -1500,9 +1559,8 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
       const state = sessionService.getChatState({
         conversationId: session.conversationId,
         instanceId: instance_id,
-        clientSessionId: extra.sessionId,
         aiResponseHint: route_hint,
-        allowClientSessionFallback: true,
+        allowClientSessionFallback: false,
         bindInstance: false,
       });
 
@@ -1543,6 +1601,14 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
           .string()
           .optional()
           .describe("Logical conversation id when known."),
+        route_hint: z
+          .string()
+          .optional()
+          .describe("Last displayed AI response text, used to resolve the session before conversation_id is known."),
+        resource_uri: z
+          .string()
+          .optional()
+          .describe("Current embedded app resource uri, used to ignore stale historical iframes."),
       },
       _meta: {
         ui: {
@@ -1550,22 +1616,36 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         },
       },
     },
-    async ({ event, detail, instance_id, conversation_id }, extra) => {
-      if ((event === "ui_tool_input" || event === "ui_host_context_changed") && instance_id) {
+    async ({ event, detail, instance_id, conversation_id, route_hint, resource_uri }, extra) => {
+      const resourceUri = typeof resource_uri === "string" && resource_uri.trim()
+        ? resource_uri.trim()
+        : typeof detail?.resourceUri === "string"
+          ? detail.resourceUri
+          : typeof detail?.resource_uri === "string"
+          ? detail.resource_uri
+          : "";
+      if (event === "ui_tool_input" && instance_id) {
         const session = sessionService.resolveSession({
           conversationId: conversation_id,
           instanceId: instance_id,
-          clientSessionId: extra.sessionId,
-          allowClientSessionFallback: true,
+          aiResponseHint: route_hint,
+          allowClientSessionFallback: false,
         });
         if (session) {
-          sessionService.bindAppInstanceToSession(session, instance_id);
-          recordIntegrationDiagnostic(diagnostics, "app_view_bound_from_tool_log", {
-            event,
-            instanceId: instance_id,
-            conversationId: session.conversationId,
-            mcpSessionId: extra.sessionId || "",
+          const bound = sessionService.bindAppInstanceToSession(session, instance_id, {
+            resourceUri,
+            routeHint: route_hint,
           });
+          if (bound) {
+            recordIntegrationDiagnostic(diagnostics, "app_view_bound_from_tool_log", {
+              event,
+              instanceId: instance_id,
+              conversationId: session.conversationId,
+              routeHint: route_hint || "",
+              resourceUri,
+              mcpSessionId: extra.sessionId || "",
+            });
+          }
         }
       }
 
@@ -1574,6 +1654,8 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         detail: detail || {},
         instanceId: instance_id || "",
         conversationId: conversation_id || "",
+        routeHint: route_hint || "",
+        resourceUri,
         mcpSessionId: extra.sessionId || "",
       });
 

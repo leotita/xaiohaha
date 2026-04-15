@@ -24,6 +24,14 @@ function normalizeConversationId(value) {
   return String(value);
 }
 
+function normalizeResourceUri(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  return String(value).trim() || null;
+}
+
 function createConversationId() {
   return `conversation_${randomUUID()}`;
 }
@@ -131,6 +139,8 @@ function createSessionState(conversationId) {
     waitingResolve: null,
     waitingClientSessionId: null,
     waitingToolInstanceId: null,
+    waitingResourceUri: null,
+    waitingRouteHint: null,
     currentAppInstanceId: null,
     messageQueue: [],
     aiResponses: [],
@@ -511,17 +521,23 @@ export class SessionService {
     if (!session.waitingResolve) {
       session.waitingClientSessionId = null;
       session.waitingToolInstanceId = null;
+      session.waitingResourceUri = null;
+      session.waitingRouteHint = null;
       return null;
     }
 
     const waitingState = {
       resolve: session.waitingResolve,
       activeInstanceId: session.waitingToolInstanceId,
+      resourceUri: session.waitingResourceUri,
+      routeHint: session.waitingRouteHint,
     };
 
     session.waitingResolve = null;
     session.waitingClientSessionId = null;
     session.waitingToolInstanceId = null;
+    session.waitingResourceUri = null;
+    session.waitingRouteHint = null;
 
     return waitingState;
   }
@@ -583,15 +599,53 @@ export class SessionService {
     this.clientSessionToConversationId.set(normalizedClientSessionId, normalizedConversationId);
   }
 
-  bindAppInstanceToSession(session, instanceId) {
+  bindAppInstanceToSession(session, instanceId, options = {}) {
     const normalizedInstanceId = normalizeInstanceId(instanceId);
+    const normalizedResourceUri = normalizeResourceUri(options.resourceUri);
+    const normalizedRouteHint = normalizeRouteHint(options.routeHint);
     if (!session || !normalizedInstanceId) {
-      return;
+      return false;
+    }
+
+    if (
+      session.waitingResolve !== null
+      && normalizedRouteHint
+      && session.waitingRouteHint
+      && session.waitingRouteHint !== normalizedRouteHint
+    ) {
+      return false;
+    }
+
+    if (
+      session.waitingResolve !== null
+      && normalizedResourceUri
+      && session.waitingResourceUri
+      && session.waitingResourceUri !== normalizedResourceUri
+    ) {
+      return false;
+    }
+
+    // 只有匹配当前这轮 check_messages 资源地址的 iframe，才能接管等待中的输入框。
+    if (
+      session.waitingResolve !== null
+      && normalizedResourceUri
+      && session.waitingResourceUri === normalizedResourceUri
+    ) {
+      session.waitingToolInstanceId = normalizedInstanceId;
+    } else if (
+      session.waitingResolve !== null
+      && !session.waitingResourceUri
+      && typeof session.waitingToolInstanceId === "string"
+      && !session.waitingToolInstanceId.startsWith("tool_")
+    ) {
+      // 兼容没有资源地址的旧状态，至少把 requestId 升级成真实的 tool_xxx。
+      session.waitingToolInstanceId = normalizedInstanceId;
     }
 
     session.currentAppInstanceId = normalizedInstanceId;
     this.touchSession(session);
     this.bindToolInstanceToConversation(normalizedInstanceId, session.conversationId);
+    return true;
   }
 
   resolveConversationIdForInstance(instanceId) {
@@ -744,13 +798,15 @@ export class SessionService {
     return event;
   }
 
-  waitForNextMessage(session, instanceId, clientSessionId) {
+  waitForNextMessage(session, instanceId, clientSessionId, resourceUri, routeHint) {
     if (session.waitingResolve) {
       this.resolveWaitingState(session, WAIT_RESOLUTIONS.REQUEST_ABORTED);
     }
 
     session.waitingToolInstanceId = normalizeInstanceId(instanceId);
     session.waitingClientSessionId = normalizeInstanceId(clientSessionId);
+    session.waitingResourceUri = normalizeResourceUri(resourceUri);
+    session.waitingRouteHint = normalizeRouteHint(routeHint);
     this.touchSession(session);
 
     // MCP 侧会在这里挂起，直到浏览器输入到达；这样可以保持“回复后立即继续等待下一条指令”的交互模式。

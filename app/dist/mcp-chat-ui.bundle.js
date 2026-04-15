@@ -14142,6 +14142,7 @@ container holding the app. Specify either width or maxWidth, and either height o
   }
 
   .xh-form[hidden],
+  .xh-composer-layer[hidden],
   .xh-preview[hidden],
   .xh-error[hidden] {
     display: none;
@@ -16221,6 +16222,16 @@ ${att.content || ""}
   var LOCAL_UPLOAD_TIMEOUT_MS = 2e4;
   var LOCAL_DIAGNOSTIC_TIMEOUT_MS = 1500;
   var FILE_MENTION_SEARCH_DEBOUNCE_MS = 60;
+  var CURRENT_APP_RESOURCE_URI = (() => {
+    if (typeof window.__XIAOHAHA_APP_RESOURCE_URI === "string" && window.__XIAOHAHA_APP_RESOURCE_URI.trim()) {
+      return window.__XIAOHAHA_APP_RESOURCE_URI.trim();
+    }
+    try {
+      return String(window.location.href || "").split("#")[0] || "";
+    } catch {
+      return "";
+    }
+  })();
   var root = document.getElementById("app");
   if (!root) throw new Error("Missing #app mount element.");
   var needsFullDom = !root.querySelector("#inputShell") || !root.querySelector("#cmdPalette") || !root.querySelector("#fileMentionPalette") || !root.querySelector("#composerLayer") || !root.querySelector("#imageLightbox") || root.querySelector("#messageInput")?.tagName !== "DIV" || !root.querySelector("#cmdPalette")?.closest("#inputShell") || !root.querySelector("#fileMentionPalette")?.closest("#inputShell");
@@ -16228,8 +16239,8 @@ ${att.content || ""}
     root.innerHTML = `
     <div class="xh-root">
       <div class="xh-preview" id="sentPreview" hidden></div>
-      <div class="xh-composer-layer" id="composerLayer">
-        <form class="xh-form" id="composerForm">
+      <div class="xh-composer-layer" id="composerLayer" hidden>
+        <form class="xh-form" id="composerForm" hidden>
           <div class="xh-input-shell" id="inputShell">
             <div class="xh-cmd-palette xh-file-palette" id="fileMentionPalette" hidden></div>
             <div class="xh-cmd-palette" id="cmdPalette" hidden></div>
@@ -16277,6 +16288,7 @@ ${att.content || ""}
   `;
   }
   var composerForm = document.getElementById("composerForm");
+  var composerLayer = document.getElementById("composerLayer");
   var messageInput = document.getElementById("messageInput");
   var sentPreview = document.getElementById("sentPreview");
   var errorBanner = document.getElementById("errorBanner");
@@ -16295,9 +16307,19 @@ ${att.content || ""}
   var imageLightboxImg = document.getElementById("imageLightboxImg");
   var imageLightboxCaption = document.getElementById("imageLightboxCaption");
   var imageLightboxClose = document.getElementById("imageLightboxClose");
+  composerLayer.hidden = true;
+  composerForm.hidden = true;
+  sentPreview.hidden = true;
+  errorBanner.hidden = true;
+  attachmentBar.hidden = true;
+  fakeCaret.hidden = true;
+  dragOverlay.hidden = true;
+  imageLightbox.hidden = true;
+  inputShell.classList.remove("xh-pseudo-focus");
   var app = new gQ({ name: "xiaohaha-chat-ui", version: "1.0.8" }, {}, { autoResize: false });
   var uiState = {
     connected: false,
+    hydrated: false,
     instanceId: "",
     conversationId: "",
     routeHint: "",
@@ -16319,6 +16341,11 @@ ${att.content || ""}
   var activeImageLightboxAttachment = null;
   var sizeSyncScheduled = false;
   var lastSyncedSize = { width: 0, height: 0 };
+  var lastRenderedComposerVisible = false;
+  var teardownRequested = false;
+  var teardownCompleted = false;
+  var acceptedToolInputForInstance = false;
+  var historicalViewFrozen = false;
   function installRichInputBridge(editorEl) {
     let disabled = false;
     let placeholder = editorEl.dataset.placeholder || "";
@@ -16453,8 +16480,89 @@ ${att.content || ""}
       });
     });
   }
+  function scheduleCollapseSizeSyncBurst() {
+    flushSizeSync();
+    window.requestAnimationFrame(() => {
+      flushSizeSync();
+    });
+    window.setTimeout(() => {
+      flushSizeSync();
+    }, 32);
+  }
   function shouldShowComposer() {
-    return uiState.sending || uiState.isCurrentView && (uiState.anyWaiting || uiState.activeTool && !uiState.completedTool);
+    return uiState.isCurrentView && (uiState.sending || uiState.waiting && !uiState.submittedMessage);
+  }
+  function shouldTeardownHistoricalView() {
+    return uiState.connected && uiState.completedTool && uiState.anyWaiting && !uiState.isCurrentView && !uiState.sending && !teardownRequested && !teardownCompleted;
+  }
+  function shouldFreezeHistoricalView() {
+    return uiState.connected && uiState.completedTool && Boolean(uiState.submittedMessage) && uiState.anyWaiting && !uiState.isCurrentView && !uiState.sending;
+  }
+  function freezeHistoricalView(source) {
+    if (historicalViewFrozen) {
+      return;
+    }
+    historicalViewFrozen = true;
+    if (pollTimer) {
+      window.clearInterval(pollTimer);
+      pollTimer = null;
+    }
+    uiState.waiting = false;
+    uiState.activeTool = false;
+    uiState.isCurrentView = false;
+    render();
+    reportDiagnosticsEvent("ui_historical_view_frozen", {
+      source,
+      conversationId: uiState.conversationId || "",
+      instanceId: uiState.instanceId || ""
+    });
+  }
+  function freezeSubmittedView(source) {
+    if (historicalViewFrozen) {
+      return;
+    }
+    historicalViewFrozen = true;
+    if (pollTimer) {
+      window.clearInterval(pollTimer);
+      pollTimer = null;
+    }
+    uiState.waiting = false;
+    uiState.activeTool = false;
+    uiState.isCurrentView = false;
+    uiState.sending = false;
+    render();
+    reportDiagnosticsEvent("ui_submitted_view_frozen", {
+      source,
+      conversationId: uiState.conversationId || "",
+      instanceId: uiState.instanceId || ""
+    });
+  }
+  function maybeRequestHistoricalTeardown(source) {
+    if (!shouldTeardownHistoricalView()) {
+      if (uiState.isCurrentView) {
+        teardownRequested = false;
+      }
+      return;
+    }
+    teardownRequested = true;
+    reportDiagnosticsEvent("ui_request_teardown_started", {
+      source,
+      conversationId: uiState.conversationId || "",
+      instanceId: uiState.instanceId || ""
+    });
+    void app.requestTeardown().then(() => {
+      reportDiagnosticsEvent("ui_request_teardown_sent", {
+        source,
+        conversationId: uiState.conversationId || "",
+        instanceId: uiState.instanceId || ""
+      });
+    }).catch((error40) => {
+      teardownRequested = false;
+      reportDiagnosticsEvent("ui_request_teardown_failed", {
+        source,
+        message: error40 instanceof Error ? error40.message : "requestTeardown failed"
+      });
+    });
   }
   function updateFakeCaret() {
     const showComposer = shouldShowComposer();
@@ -16750,7 +16858,9 @@ ${att.content || ""}
       event,
       detail,
       instanceId: uiState.instanceId || void 0,
-      conversationId: uiState.conversationId || void 0
+      conversationId: uiState.conversationId || void 0,
+      routeHint: uiState.routeHint || void 0,
+      resourceUri: CURRENT_APP_RESOURCE_URI || void 0
     };
     try {
       await callLocalJson("/app/log", {
@@ -16771,7 +16881,9 @@ ${att.content || ""}
           event,
           detail,
           instance_id: uiState.instanceId || void 0,
-          conversation_id: uiState.conversationId || void 0
+          conversation_id: uiState.conversationId || void 0,
+          route_hint: uiState.routeHint || void 0,
+          resource_uri: CURRENT_APP_RESOURCE_URI || void 0
         }
       }, {
         timeout: LOCAL_DIAGNOSTIC_TIMEOUT_MS
@@ -17048,8 +17160,10 @@ ${att.content || ""}
     return extractState(result);
   }
   function render() {
-    const showPreview = Boolean(uiState.submittedMessage);
-    const showComposer = shouldShowComposer();
+    const showPreview = uiState.hydrated && Boolean(uiState.submittedMessage);
+    const showComposer = uiState.hydrated && shouldShowComposer();
+    const composerCollapsed = lastRenderedComposerVisible && !showComposer;
+    composerLayer.hidden = !showComposer;
     composerForm.hidden = !showComposer;
     sentPreview.hidden = !showPreview;
     errorBanner.hidden = !uiState.error;
@@ -17062,9 +17176,17 @@ ${att.content || ""}
       sentPreview.innerHTML = "";
     }
     updateFakeCaret();
-    scheduleSizeSync();
+    if (composerCollapsed) {
+      scheduleCollapseSizeSyncBurst();
+    } else {
+      scheduleSizeSync();
+    }
+    lastRenderedComposerVisible = showComposer;
   }
   async function refreshState() {
+    if (historicalViewFrozen) {
+      return;
+    }
     let nextState = null;
     let localState = null;
     try {
@@ -17086,12 +17208,16 @@ ${att.content || ""}
     if (!nextState) throw new Error("Failed to parse chat state from MCP response.");
     const previewMessage = nextState.previewMessage.trim();
     uiState.connected = true;
+    uiState.hydrated = true;
     uiState.conversationId = nextState.conversationId || uiState.conversationId;
     uiState.anyWaiting = nextState.anyWaiting;
-    uiState.waiting = nextState.waiting;
+    uiState.waiting = nextState.waiting && nextState.isCurrentView;
     uiState.isCurrentView = nextState.isCurrentView;
-    if (nextState.waiting) {
-      uiState.activeTool = true;
+    uiState.activeTool = uiState.waiting;
+    if (!uiState.isCurrentView) {
+      uiState.waiting = false;
+      uiState.sending = false;
+      uiState.activeTool = false;
     }
     uiState.error = "";
     uiState.latestAiMessage = getLatestAiMessage(nextState.events);
@@ -17106,6 +17232,11 @@ ${att.content || ""}
       uiState.submittedAt = "";
     }
     render();
+    if (shouldFreezeHistoricalView()) {
+      freezeHistoricalView("refresh_state");
+      return;
+    }
+    maybeRequestHistoricalTeardown("refresh_state");
   }
   function executeCommand(cmdId) {
     mentionSearchSeq++;
@@ -17192,7 +17323,7 @@ ${att.content || ""}
       if (nextState) {
         uiState.conversationId = nextState.conversationId || uiState.conversationId;
         uiState.anyWaiting = nextState.anyWaiting;
-        uiState.waiting = nextState.waiting;
+        uiState.waiting = nextState.waiting && nextState.isCurrentView;
         uiState.isCurrentView = nextState.isCurrentView;
         uiState.latestAiMessage = getLatestAiMessage(nextState.events);
         const pm = nextState.previewMessage.trim();
@@ -17209,6 +17340,9 @@ ${att.content || ""}
       messageInput.value = "";
       attachments.clear();
       autoResizeInput();
+      if (uiState.submittedMessage) {
+        freezeSubmittedView("send_message_succeeded");
+      }
     } catch (error40) {
       uiState.anyWaiting = true;
       uiState.waiting = true;
@@ -17647,27 +17781,86 @@ ${att.content || ""}
     }
   });
   app.onteardown = async () => {
+    teardownCompleted = true;
     if (pollTimer) {
       window.clearInterval(pollTimer);
       pollTimer = null;
     }
+    reportDiagnosticsEvent("ui_teardown", {
+      conversationId: uiState.conversationId || "",
+      instanceId: uiState.instanceId || ""
+    });
     return {};
   };
   app.ontoolinput = (params) => {
-    uiState.anyWaiting = true;
-    uiState.activeTool = true;
-    uiState.waiting = true;
-    uiState.isCurrentView = true;
+    if (historicalViewFrozen) {
+      return;
+    }
+    const explicitConversationId = extractConversationIdFromArgs(params?.arguments);
+    const nextRouteHint = extractRouteHintFromArgs(params?.arguments) || uiState.latestAiMessage || uiState.routeHint;
+    const isRepeatedToolInput = acceptedToolInputForInstance && uiState.completedTool;
+    const isHistoricalProbe = uiState.completedTool && !explicitConversationId;
+    uiState.conversationId = explicitConversationId || uiState.conversationId;
+    uiState.routeHint = nextRouteHint;
+    if (isHistoricalProbe) {
+      uiState.anyWaiting = false;
+      uiState.waiting = false;
+      uiState.isCurrentView = false;
+      uiState.activeTool = false;
+      uiState.sending = false;
+      reportDiagnosticsEvent("ui_tool_input_ignored_historical", {
+        toolName: app.getHostContext()?.toolInfo?.tool?.name || "",
+        hasConversationId: false,
+        hasRouteHint: Boolean(uiState.routeHint)
+      });
+      render();
+      void refreshState().catch((err) => {
+        uiState.error = err instanceof Error ? err.message : "\u5237\u65B0\u5931\u8D25";
+        reportDiagnosticsEvent("ui_refresh_failed", {
+          source: "tool_input_ignored_historical",
+          message: uiState.error
+        });
+        render();
+      });
+      return;
+    }
+    if (isRepeatedToolInput) {
+      uiState.anyWaiting = false;
+      uiState.waiting = false;
+      uiState.isCurrentView = false;
+      uiState.activeTool = false;
+      uiState.sending = false;
+      reportDiagnosticsEvent("ui_tool_input_ignored_duplicate", {
+        toolName: app.getHostContext()?.toolInfo?.tool?.name || "",
+        hasConversationId: Boolean(uiState.conversationId),
+        hasRouteHint: Boolean(uiState.routeHint)
+      });
+      render();
+      void refreshState().catch((err) => {
+        uiState.error = err instanceof Error ? err.message : "\u5237\u65B0\u5931\u8D25";
+        reportDiagnosticsEvent("ui_refresh_failed", {
+          source: "tool_input_ignored_duplicate",
+          message: uiState.error
+        });
+        render();
+      });
+      return;
+    }
+    acceptedToolInputForInstance = true;
+    uiState.hydrated = false;
+    uiState.anyWaiting = false;
+    uiState.activeTool = false;
+    uiState.waiting = false;
+    uiState.isCurrentView = false;
     uiState.completedTool = false;
     uiState.submittedMessage = "";
     uiState.submittedAt = "";
-    uiState.conversationId = extractConversationIdFromArgs(params?.arguments) || uiState.conversationId;
-    uiState.routeHint = extractRouteHintFromArgs(params?.arguments) || uiState.latestAiMessage || uiState.routeHint;
     reportDiagnosticsEvent("ui_tool_input", {
       toolName: app.getHostContext()?.toolInfo?.tool?.name || "",
       hasConversationId: Boolean(uiState.conversationId),
       hasRouteHint: Boolean(uiState.routeHint)
     });
+    render();
     void refreshState().catch((err) => {
       uiState.error = err instanceof Error ? err.message : "\u5237\u65B0\u5931\u8D25";
       reportDiagnosticsEvent("ui_refresh_failed", {
@@ -17678,16 +17871,29 @@ ${att.content || ""}
     });
   };
   app.ontoolresult = (result) => {
+    if (historicalViewFrozen) {
+      return;
+    }
     const stateFromResult = extractState(result);
     const nextState = extractPromptStateFromToolResult(result);
     if (stateFromResult) {
+      const resultPreviewMessage = stateFromResult.previewMessage.trim();
+      uiState.hydrated = true;
       uiState.anyWaiting = stateFromResult.anyWaiting;
-      uiState.waiting = stateFromResult.waiting;
+      uiState.waiting = stateFromResult.waiting && stateFromResult.isCurrentView;
       uiState.isCurrentView = stateFromResult.isCurrentView;
       uiState.latestAiMessage = getLatestAiMessage(stateFromResult.events) || uiState.latestAiMessage;
+      if (resultPreviewMessage) {
+        uiState.submittedMessage = resultPreviewMessage;
+      }
+      if (!uiState.isCurrentView) {
+        uiState.waiting = false;
+        uiState.sending = false;
+        uiState.activeTool = false;
+      }
     }
     uiState.conversationId = nextState.conversationId || uiState.conversationId;
-    uiState.waiting = stateFromResult?.waiting || false;
+    uiState.waiting = Boolean(stateFromResult?.waiting) && uiState.isCurrentView;
     uiState.activeTool = false;
     uiState.completedTool = true;
     reportDiagnosticsEvent("ui_tool_result", {
@@ -17698,6 +17904,7 @@ ${att.content || ""}
       waiting: uiState.waiting,
       isCurrentView: uiState.isCurrentView
     });
+    render();
     void refreshState().catch((err) => {
       reportDiagnosticsEvent("ui_refresh_failed", {
         source: "tool_result",
@@ -17705,8 +17912,12 @@ ${att.content || ""}
       });
       render();
     });
+    maybeRequestHistoricalTeardown("tool_result");
   };
   app.ontoolcancelled = () => {
+    if (historicalViewFrozen) {
+      return;
+    }
     uiState.anyWaiting = false;
     uiState.waiting = false;
     uiState.activeTool = false;
@@ -17716,13 +17927,25 @@ ${att.content || ""}
     render();
   };
   app.onhostcontextchanged = (hostContext) => {
+    if (historicalViewFrozen) {
+      return;
+    }
     const instanceChanged = syncHostContext(hostContext);
     reportDiagnosticsEvent("ui_host_context_changed", {
       toolName: hostContext?.toolInfo?.tool?.name || "",
       instanceChanged,
       instanceId: hostContext?.toolInfo?.id ?? ""
     });
-    if (instanceChanged && uiState.connected) {
+    if (uiState.connected) {
+      if (instanceChanged) {
+        acceptedToolInputForInstance = false;
+      }
+      if (uiState.completedTool && !uiState.sending) {
+        uiState.waiting = false;
+        uiState.activeTool = false;
+        uiState.isCurrentView = false;
+      }
+      render();
       void refreshState().catch((err) => {
         reportDiagnosticsEvent("ui_refresh_failed", {
           source: "host_context_changed",
@@ -17733,6 +17956,7 @@ ${att.content || ""}
       return;
     }
     render();
+    maybeRequestHistoricalTeardown("host_context_changed");
   };
   async function start() {
     reportDiagnosticsEvent("ui_boot", {

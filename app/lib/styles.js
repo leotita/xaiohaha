@@ -90,6 +90,7 @@ export const STYLES = `
   }
 
   .xh-form[hidden],
+  .xh-composer-layer[hidden],
   .xh-preview[hidden],
   .xh-error[hidden] {
     display: none;
