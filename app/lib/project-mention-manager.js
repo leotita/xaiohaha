@@ -426,6 +426,77 @@ function trimTrailingSpace(text) {
   return String(text || "").endsWith(" ") ? String(text).slice(0, -1) : String(text || "");
 }
 
+function getLeadingSerializableChar(node) {
+  if (!node) {
+    return "";
+  }
+
+  if (node.nodeType === Node.TEXT_NODE) {
+    return String(node.textContent || "").charAt(0);
+  }
+
+  if (node.nodeType !== Node.ELEMENT_NODE) {
+    return "";
+  }
+
+  if (node.matches?.(CHIP_SELECTOR)) {
+    return getChipSerializedText(node).charAt(0);
+  }
+
+  if (node.tagName === "BR") {
+    return "\n";
+  }
+
+  for (const child of node.childNodes) {
+    const nextChar = getLeadingSerializableChar(child);
+    if (nextChar) {
+      return nextChar;
+    }
+  }
+
+  return "";
+}
+
+function shouldInsertTrailingSpace(nextNode) {
+  if (!nextNode) {
+    return true;
+  }
+
+  const nextChar = getLeadingSerializableChar(nextNode);
+  if (!nextChar) {
+    return true;
+  }
+
+  if (/\s/.test(nextChar)) {
+    return false;
+  }
+
+  if (/[,.;:!?)\]}>，。；：！？、）】》]/.test(nextChar)) {
+    return false;
+  }
+
+  return true;
+}
+
+function insertTrailingSpaceAfterChip(chip) {
+  if (!chip?.parentNode) {
+    return 0;
+  }
+
+  const nextNode = chip.nextSibling;
+  if (!shouldInsertTrailingSpace(nextNode)) {
+    return 0;
+  }
+
+  if (nextNode?.nodeType === Node.TEXT_NODE) {
+    nextNode.textContent = ` ${nextNode.textContent || ""}`;
+    return 1;
+  }
+
+  chip.after(document.createTextNode(" "));
+  return 1;
+}
+
 export class ProjectMentionManager {
   constructor(editorEl) {
     this.editorEl = editorEl;
@@ -484,10 +555,12 @@ export class ProjectMentionManager {
     );
   }
 
-  insertChip(chip, startOffset = null, endOffset = startOffset) {
+  insertChip(chip, startOffset = null, endOffset = startOffset, options = {}) {
     if (!chip) {
       return null;
     }
+
+    const ensureTrailingSpace = Boolean(options?.ensureTrailingSpace);
 
     if (startOffset === null || endOffset === null) {
       const selection = window.getSelection();
@@ -518,7 +591,8 @@ export class ProjectMentionManager {
     this.editorEl.focus();
 
     const chipStart = getChipStartOffset(this.editorEl, chip);
-    setEditorSelectionRange(this.editorEl, chipStart + getChipLength(chip));
+    const trailingOffset = ensureTrailingSpace ? insertTrailingSpaceAfterChip(chip) : 0;
+    setEditorSelectionRange(this.editorEl, chipStart + getChipLength(chip) + trailingOffset);
     this.onChange?.();
     return chip;
   }
@@ -532,7 +606,7 @@ export class ProjectMentionManager {
     const chip = createMentionChip(item);
     const startOffset = Math.max(0, Number(mention?.tokenStart) || 0);
     const endOffset = Math.max(startOffset, Number(mention?.tokenEnd) || startOffset);
-    this.insertChip(chip, startOffset, endOffset);
+    this.insertChip(chip, startOffset, endOffset, { ensureTrailingSpace: true });
   }
 
   addInlineAttachment(item, selectionRange = null) {

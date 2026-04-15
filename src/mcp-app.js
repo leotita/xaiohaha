@@ -904,13 +904,17 @@ function summarizeStateForDiagnostic(state) {
     return {};
   }
 
+  const eventCount = Number.isFinite(state.eventCount)
+    ? Math.max(0, Math.floor(state.eventCount))
+    : Array.isArray(state.events) ? state.events.length : 0;
+
   return {
     conversationId: typeof state.conversationId === "string" ? state.conversationId : "",
     anyWaiting: Boolean(state.anyWaiting),
     waiting: Boolean(state.waiting),
     isCurrentView: Boolean(state.isCurrentView),
     queueLength: Number.isFinite(state.queueLength) ? state.queueLength : 0,
-    eventCount: Array.isArray(state.events) ? state.events.length : 0,
+    eventCount,
   };
 }
 
@@ -1404,6 +1408,14 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
           .string()
           .optional()
           .describe("Last displayed AI response text, used as a first-round routing hint before conversation_id is available."),
+        resource_uri: z
+          .string()
+          .optional()
+          .describe("Current embedded app resource uri, used to bind the newest waiting iframe to the session."),
+        bind_instance: z
+          .boolean()
+          .optional()
+          .describe("When true, attempt to bind the querying iframe as the current app view."),
       },
       _meta: {
         ui: {
@@ -1411,19 +1423,22 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         },
       },
     },
-    async ({ instance_id, conversation_id, route_hint }, extra) => {
+    async ({ instance_id, conversation_id, route_hint, resource_uri, bind_instance }, extra) => {
       const state = sessionService.getChatState({
         conversationId: conversation_id,
         instanceId: instance_id,
         aiResponseHint: route_hint,
+        resourceUri: resource_uri,
         allowClientSessionFallback: false,
-        bindInstance: false,
+        bindInstance: Boolean(bind_instance),
       });
 
       recordIntegrationDiagnostic(diagnostics, "app_state_tool_query", {
         instanceId: instance_id || "",
         conversationId: conversation_id || "",
         routeHint: route_hint || "",
+        resourceUri: resource_uri || "",
+        bindInstance: Boolean(bind_instance),
         mcpSessionId: extra.sessionId || "",
         ...summarizeStateForDiagnostic(state),
       });

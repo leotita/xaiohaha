@@ -15818,6 +15818,61 @@ ${att.content || ""}
   function trimTrailingSpace(text) {
     return String(text || "").endsWith(" ") ? String(text).slice(0, -1) : String(text || "");
   }
+  function getLeadingSerializableChar(node) {
+    if (!node) {
+      return "";
+    }
+    if (node.nodeType === Node.TEXT_NODE) {
+      return String(node.textContent || "").charAt(0);
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      return "";
+    }
+    if (node.matches?.(CHIP_SELECTOR)) {
+      return getChipSerializedText(node).charAt(0);
+    }
+    if (node.tagName === "BR") {
+      return "\n";
+    }
+    for (const child of node.childNodes) {
+      const nextChar = getLeadingSerializableChar(child);
+      if (nextChar) {
+        return nextChar;
+      }
+    }
+    return "";
+  }
+  function shouldInsertTrailingSpace(nextNode) {
+    if (!nextNode) {
+      return true;
+    }
+    const nextChar = getLeadingSerializableChar(nextNode);
+    if (!nextChar) {
+      return true;
+    }
+    if (/\s/.test(nextChar)) {
+      return false;
+    }
+    if (/[,.;:!?)\]}>，。；：！？、）】》]/.test(nextChar)) {
+      return false;
+    }
+    return true;
+  }
+  function insertTrailingSpaceAfterChip(chip) {
+    if (!chip?.parentNode) {
+      return 0;
+    }
+    const nextNode = chip.nextSibling;
+    if (!shouldInsertTrailingSpace(nextNode)) {
+      return 0;
+    }
+    if (nextNode?.nodeType === Node.TEXT_NODE) {
+      nextNode.textContent = ` ${nextNode.textContent || ""}`;
+      return 1;
+    }
+    chip.after(document.createTextNode(" "));
+    return 1;
+  }
   var ProjectMentionManager = class {
     constructor(editorEl) {
       this.editorEl = editorEl;
@@ -15866,10 +15921,11 @@ ${att.content || ""}
         `[data-xh-chip-kind="${CHIP_KIND_SNIPPET}"][data-xh-chip-attachment-id="${attachmentId}"]`
       );
     }
-    insertChip(chip, startOffset = null, endOffset = startOffset) {
+    insertChip(chip, startOffset = null, endOffset = startOffset, options = {}) {
       if (!chip) {
         return null;
       }
+      const ensureTrailingSpace = Boolean(options?.ensureTrailingSpace);
       if (startOffset === null || endOffset === null) {
         const selection = window.getSelection();
         if (!selection || selection.rangeCount === 0 || !this.editorEl.contains(selection.anchorNode)) {
@@ -15895,7 +15951,8 @@ ${att.content || ""}
       this.editorEl.normalize();
       this.editorEl.focus();
       const chipStart = getChipStartOffset(this.editorEl, chip);
-      setEditorSelectionRange(this.editorEl, chipStart + getChipLength(chip));
+      const trailingOffset = ensureTrailingSpace ? insertTrailingSpaceAfterChip(chip) : 0;
+      setEditorSelectionRange(this.editorEl, chipStart + getChipLength(chip) + trailingOffset);
       this.onChange?.();
       return chip;
     }
@@ -15907,7 +15964,7 @@ ${att.content || ""}
       const chip = createMentionChip(item);
       const startOffset = Math.max(0, Number(mention?.tokenStart) || 0);
       const endOffset = Math.max(startOffset, Number(mention?.tokenEnd) || startOffset);
-      this.insertChip(chip, startOffset, endOffset);
+      this.insertChip(chip, startOffset, endOffset, { ensureTrailingSpace: true });
     }
     addInlineAttachment(item, selectionRange = null) {
       const chip = createSnippetChip(item);
@@ -16222,6 +16279,10 @@ ${att.content || ""}
   var LOCAL_UPLOAD_TIMEOUT_MS = 2e4;
   var LOCAL_DIAGNOSTIC_TIMEOUT_MS = 1500;
   var FILE_MENTION_SEARCH_DEBOUNCE_MS = 60;
+  var BOOTSTRAP_REFRESH_INTERVAL_MS = 160;
+  var BOOTSTRAP_REFRESH_MAX_ATTEMPTS = 12;
+  var USE_MANUAL_SIZE_SYNC = false;
+  var USE_COLLAPSE_SIZE_SYNC = true;
   var CURRENT_APP_RESOURCE_URI = (() => {
     if (typeof window.__XIAOHAHA_APP_RESOURCE_URI === "string" && window.__XIAOHAHA_APP_RESOURCE_URI.trim()) {
       return window.__XIAOHAHA_APP_RESOURCE_URI.trim();
@@ -16316,10 +16377,11 @@ ${att.content || ""}
   dragOverlay.hidden = true;
   imageLightbox.hidden = true;
   inputShell.classList.remove("xh-pseudo-focus");
-  var app = new gQ({ name: "xiaohaha-chat-ui", version: "1.0.8" }, {}, { autoResize: false });
+  var app = new gQ({ name: "xiaohaha-chat-ui", version: "1.0.8" }, {}, { autoResize: true });
   var uiState = {
     connected: false,
     hydrated: false,
+    pendingView: false,
     instanceId: "",
     conversationId: "",
     routeHint: "",
@@ -16346,6 +16408,9 @@ ${att.content || ""}
   var teardownCompleted = false;
   var acceptedToolInputForInstance = false;
   var historicalViewFrozen = false;
+  var bootstrapRefreshTimer = null;
+  var bootstrapRefreshAttempts = 0;
+  var lastRenderedPreviewText = "";
   function installRichInputBridge(editorEl) {
     let disabled = false;
     let placeholder = editorEl.dataset.placeholder || "";
@@ -16436,19 +16501,30 @@ ${att.content || ""}
       Math.min(messageInput.scrollHeight, INPUT_MAX_HEIGHT_PX)
     )}px`;
   }
+  function measureIntrinsicHeight(element) {
+    if (!element) {
+      return 0;
+    }
+    return Math.max(
+      Number(element.scrollHeight) || 0,
+      Number(element.offsetHeight) || 0,
+      Math.ceil(element.getBoundingClientRect?.().height || 0)
+    );
+  }
   function measureAppSize() {
     const hostRoot = root.firstElementChild || root;
-    const width = Math.ceil(root.getBoundingClientRect().width || window.innerWidth);
+    const widthCandidates = [
+      root.getBoundingClientRect().width,
+      hostRoot?.getBoundingClientRect?.().width,
+      root.scrollWidth,
+      hostRoot?.scrollWidth,
+      window.innerWidth
+    ].filter((value) => Number.isFinite(value) && value > 0);
+    const width = Math.ceil(Math.max(...widthCandidates, 1));
+    const hostHeight = measureIntrinsicHeight(hostRoot);
     const heightCandidates = [
-      root.scrollHeight,
-      root.offsetHeight,
-      root.getBoundingClientRect().height,
-      hostRoot?.scrollHeight,
-      hostRoot?.offsetHeight,
-      hostRoot?.getBoundingClientRect?.().height,
-      document.body?.scrollHeight,
-      document.body?.offsetHeight,
-      document.body?.getBoundingClientRect?.().height
+      hostHeight,
+      hostRoot === root ? 0 : measureIntrinsicHeight(root)
     ].filter((value) => Number.isFinite(value) && value > 0);
     const height = Math.ceil(Math.max(...heightCandidates, 1));
     return {
@@ -16456,7 +16532,7 @@ ${att.content || ""}
       height
     };
   }
-  function flushSizeSync() {
+  function sendMeasuredSizeChanged() {
     if (!uiState.connected || document.visibilityState === "hidden") {
       return;
     }
@@ -16468,7 +16544,16 @@ ${att.content || ""}
     void app.sendSizeChanged(nextSize).catch(() => {
     });
   }
+  function flushSizeSync() {
+    if (!USE_MANUAL_SIZE_SYNC) {
+      return;
+    }
+    sendMeasuredSizeChanged();
+  }
   function scheduleSizeSync() {
+    if (!USE_MANUAL_SIZE_SYNC) {
+      return;
+    }
     if (sizeSyncScheduled) {
       return;
     }
@@ -16481,22 +16566,100 @@ ${att.content || ""}
     });
   }
   function scheduleCollapseSizeSyncBurst() {
-    flushSizeSync();
+    if (!USE_COLLAPSE_SIZE_SYNC) {
+      return;
+    }
+    sendMeasuredSizeChanged();
     window.requestAnimationFrame(() => {
-      flushSizeSync();
+      sendMeasuredSizeChanged();
     });
     window.setTimeout(() => {
-      flushSizeSync();
+      sendMeasuredSizeChanged();
     }, 32);
   }
   function shouldShowComposer() {
     return uiState.isCurrentView && (uiState.sending || uiState.waiting && !uiState.submittedMessage);
+  }
+  function shouldStopBootstrapRefresh() {
+    return historicalViewFrozen || teardownCompleted || !uiState.connected || uiState.hydrated && (uiState.isCurrentView || Boolean(uiState.submittedMessage));
+  }
+  function stopBootstrapRefresh() {
+    if (bootstrapRefreshTimer) {
+      window.clearInterval(bootstrapRefreshTimer);
+      bootstrapRefreshTimer = null;
+    }
+    bootstrapRefreshAttempts = 0;
+  }
+  function runBootstrapRefresh(source) {
+    if (shouldStopBootstrapRefresh()) {
+      stopBootstrapRefresh();
+      return;
+    }
+    bootstrapRefreshAttempts += 1;
+    const instanceChanged = syncHostContext(app.getHostContext());
+    if (instanceChanged) {
+      acceptedToolInputForInstance = false;
+    }
+    void refreshState().catch(() => {
+    });
+    if (bootstrapRefreshAttempts >= BOOTSTRAP_REFRESH_MAX_ATTEMPTS) {
+      reportDiagnosticsEvent("ui_bootstrap_refresh_exhausted", {
+        source,
+        instanceId: uiState.instanceId || "",
+        conversationId: uiState.conversationId || ""
+      });
+      stopBootstrapRefresh();
+    }
+  }
+  function ensureBootstrapRefresh(source) {
+    if (shouldStopBootstrapRefresh()) {
+      stopBootstrapRefresh();
+      return;
+    }
+    if (!bootstrapRefreshTimer) {
+      bootstrapRefreshAttempts = 0;
+      bootstrapRefreshTimer = window.setInterval(() => {
+        runBootstrapRefresh(source);
+      }, BOOTSTRAP_REFRESH_INTERVAL_MS);
+      reportDiagnosticsEvent("ui_bootstrap_refresh_started", {
+        source,
+        instanceId: uiState.instanceId || "",
+        conversationId: uiState.conversationId || ""
+      });
+    }
+    runBootstrapRefresh(source);
   }
   function shouldTeardownHistoricalView() {
     return uiState.connected && uiState.completedTool && uiState.anyWaiting && !uiState.isCurrentView && !uiState.sending && !teardownRequested && !teardownCompleted;
   }
   function shouldFreezeHistoricalView() {
     return uiState.connected && uiState.completedTool && Boolean(uiState.submittedMessage) && uiState.anyWaiting && !uiState.isCurrentView && !uiState.sending;
+  }
+  function isCheckMessagesToolContext(hostContext = app.getHostContext()) {
+    return hostContext?.toolInfo?.tool?.name === "check_messages";
+  }
+  function enterPendingViewShell(source, options = {}) {
+    const resetRouting = Boolean(options.resetRouting);
+    uiState.hydrated = false;
+    uiState.pendingView = true;
+    uiState.anyWaiting = false;
+    uiState.waiting = false;
+    uiState.isCurrentView = false;
+    uiState.activeTool = false;
+    uiState.completedTool = false;
+    uiState.error = "";
+    uiState.submittedMessage = "";
+    uiState.submittedAt = "";
+    if (resetRouting) {
+      uiState.conversationId = "";
+      uiState.routeHint = "";
+    }
+    reportDiagnosticsEvent("ui_pending_shell_entered", {
+      source,
+      toolName: app.getHostContext()?.toolInfo?.tool?.name || "",
+      instanceId: uiState.instanceId || "",
+      conversationId: uiState.conversationId || ""
+    });
   }
   function freezeHistoricalView(source) {
     if (historicalViewFrozen) {
@@ -16507,6 +16670,7 @@ ${att.content || ""}
       window.clearInterval(pollTimer);
       pollTimer = null;
     }
+    stopBootstrapRefresh();
     uiState.waiting = false;
     uiState.activeTool = false;
     uiState.isCurrentView = false;
@@ -16526,6 +16690,7 @@ ${att.content || ""}
       window.clearInterval(pollTimer);
       pollTimer = null;
     }
+    stopBootstrapRefresh();
     uiState.waiting = false;
     uiState.activeTool = false;
     uiState.isCurrentView = false;
@@ -17048,13 +17213,18 @@ ${att.content || ""}
     return previousInstanceId !== uiState.instanceId;
   }
   function normalizeState(state) {
+    const events = Array.isArray(state?.events) ? state.events : [];
+    const eventCount = Number.isFinite(state?.eventCount) ? Math.max(0, Math.floor(state.eventCount)) : events.length;
+    const latestAiMessage = typeof state?.latestAiMessage === "string" && state.latestAiMessage.trim() ? state.latestAiMessage.trim() : getLatestAiMessage(events);
     return {
       conversationId: typeof state?.conversationId === "string" ? state.conversationId : "",
       anyWaiting: Boolean(state?.anyWaiting),
       waiting: Boolean(state?.waiting),
       isCurrentView: Boolean(state?.isCurrentView),
       previewMessage: typeof state?.previewMessage === "string" ? state.previewMessage : "",
-      events: Array.isArray(state?.events) ? state.events : []
+      eventCount,
+      latestAiMessage,
+      events
     };
   }
   function getLatestAiMessage(events) {
@@ -17064,6 +17234,11 @@ ${att.content || ""}
       if (ev?.role === "ai" && typeof ev?.text === "string" && ev.text.trim()) return ev.text.trim();
     }
     return "";
+  }
+  function hasResolvedChatState(state) {
+    return Boolean(
+      state && (state.conversationId || state.anyWaiting || state.waiting || state.isCurrentView || state.eventCount > 0 || state.latestAiMessage || state.previewMessage)
+    );
   }
   function extractState(result) {
     if (result?.structuredContent?.state) return normalizeState(result.structuredContent.state);
@@ -17103,12 +17278,19 @@ ${att.content || ""}
   function isRoutingReady() {
     return Boolean(uiState.instanceId || uiState.conversationId || uiState.routeHint);
   }
+  function shouldAttemptBindCurrentView() {
+    return Boolean(
+      uiState.pendingView && uiState.instanceId && (uiState.conversationId || uiState.routeHint)
+    );
+  }
   async function refreshStateFromLocalHttp() {
     const payload = await callLocalJson("/app/state", {
       params: {
         instanceId: uiState.instanceId || void 0,
         conversationId: uiState.conversationId || void 0,
-        routeHint: uiState.routeHint || void 0
+        routeHint: uiState.routeHint || void 0,
+        resourceUri: CURRENT_APP_RESOURCE_URI || void 0,
+        bindInstance: shouldAttemptBindCurrentView() ? "1" : void 0
       }
     });
     return normalizeState(payload?.state);
@@ -17119,7 +17301,9 @@ ${att.content || ""}
       arguments: {
         instance_id: uiState.instanceId || void 0,
         conversation_id: uiState.conversationId || void 0,
-        route_hint: uiState.routeHint || void 0
+        route_hint: uiState.routeHint || void 0,
+        resource_uri: CURRENT_APP_RESOURCE_URI || void 0,
+        bind_instance: shouldAttemptBindCurrentView() || void 0
       }
     }, {
       timeout: LOCAL_HTTP_TIMEOUT_MS
@@ -17161,19 +17345,19 @@ ${att.content || ""}
   }
   function render() {
     const showPreview = uiState.hydrated && Boolean(uiState.submittedMessage);
-    const showComposer = uiState.hydrated && shouldShowComposer();
+    const showComposer = uiState.pendingView || uiState.hydrated && shouldShowComposer();
     const composerCollapsed = lastRenderedComposerVisible && !showComposer;
     composerLayer.hidden = !showComposer;
     composerForm.hidden = !showComposer;
     sentPreview.hidden = !showPreview;
     errorBanner.hidden = !uiState.error;
     errorBanner.textContent = uiState.error;
-    messageInput.disabled = uiState.sending || !isRoutingReady();
-    messageInput.placeholder = isRoutingReady() ? "\u7EE7\u7EED\u7ED9 Agent \u53D1\u6D88\u606F... (/ \u8C03\u51FA\u547D\u4EE4)" : "\u4F1A\u8BDD\u521D\u59CB\u5316\u4E2D\uFF0C\u8BF7\u7A0D\u5019...";
-    if (showPreview) {
-      sentPreview.innerHTML = escapeHtml(uiState.submittedMessage);
-    } else {
-      sentPreview.innerHTML = "";
+    messageInput.disabled = uiState.sending || uiState.pendingView || !isRoutingReady();
+    messageInput.placeholder = uiState.pendingView ? "\u4F1A\u8BDD\u540C\u6B65\u4E2D\uFF0C\u8BF7\u7A0D\u5019..." : isRoutingReady() ? "\u7EE7\u7EED\u7ED9 Agent \u53D1\u6D88\u606F... (/ \u8C03\u51FA\u547D\u4EE4)" : "\u4F1A\u8BDD\u521D\u59CB\u5316\u4E2D\uFF0C\u8BF7\u7A0D\u5019...";
+    const nextPreviewText = showPreview ? uiState.submittedMessage : "";
+    if (nextPreviewText !== lastRenderedPreviewText) {
+      sentPreview.innerHTML = nextPreviewText ? escapeHtml(nextPreviewText) : "";
+      lastRenderedPreviewText = nextPreviewText;
     }
     updateFakeCaret();
     if (composerCollapsed) {
@@ -17187,15 +17371,14 @@ ${att.content || ""}
     if (historicalViewFrozen) {
       return;
     }
+    const wasPendingView = uiState.pendingView;
     let nextState = null;
     let localState = null;
     try {
       localState = await refreshStateFromLocalHttp();
     } catch {
     }
-    const hasResolvedLocalState = Boolean(
-      localState && (localState.conversationId || localState.anyWaiting || localState.waiting || localState.isCurrentView || Array.isArray(localState.events) && localState.events.length > 0 || localState.previewMessage)
-    );
+    const hasResolvedLocalState = hasResolvedChatState(localState);
     if (hasResolvedLocalState) {
       nextState = localState;
     } else {
@@ -17206,9 +17389,26 @@ ${att.content || ""}
       }
     }
     if (!nextState) throw new Error("Failed to parse chat state from MCP response.");
+    const prevRenderState = {
+      connected: uiState.connected,
+      hydrated: uiState.hydrated,
+      pendingView: uiState.pendingView,
+      waiting: uiState.waiting,
+      isCurrentView: uiState.isCurrentView,
+      activeTool: uiState.activeTool,
+      error: uiState.error,
+      sending: uiState.sending,
+      submittedMessage: uiState.submittedMessage,
+      instanceId: uiState.instanceId,
+      conversationId: uiState.conversationId,
+      routeHint: uiState.routeHint
+    };
     const previewMessage = nextState.previewMessage.trim();
     uiState.connected = true;
     uiState.hydrated = true;
+    uiState.pendingView = Boolean(
+      wasPendingView && !nextState.isCurrentView && !previewMessage && !uiState.completedTool
+    );
     uiState.conversationId = nextState.conversationId || uiState.conversationId;
     uiState.anyWaiting = nextState.anyWaiting;
     uiState.waiting = nextState.waiting && nextState.isCurrentView;
@@ -17220,7 +17420,7 @@ ${att.content || ""}
       uiState.activeTool = false;
     }
     uiState.error = "";
-    uiState.latestAiMessage = getLatestAiMessage(nextState.events);
+    uiState.latestAiMessage = nextState.latestAiMessage || getLatestAiMessage(nextState.events);
     if (uiState.latestAiMessage) {
       uiState.routeHint = uiState.latestAiMessage;
     }
@@ -17231,7 +17431,27 @@ ${att.content || ""}
       uiState.submittedMessage = "";
       uiState.submittedAt = "";
     }
-    render();
+    const nextRenderState = {
+      connected: uiState.connected,
+      hydrated: uiState.hydrated,
+      pendingView: uiState.pendingView,
+      waiting: uiState.waiting,
+      isCurrentView: uiState.isCurrentView,
+      activeTool: uiState.activeTool,
+      error: uiState.error,
+      sending: uiState.sending,
+      submittedMessage: uiState.submittedMessage,
+      instanceId: uiState.instanceId,
+      conversationId: uiState.conversationId,
+      routeHint: uiState.routeHint
+    };
+    const shouldRender = Object.keys(nextRenderState).some((key) => nextRenderState[key] !== prevRenderState[key]);
+    if (shouldRender) {
+      render();
+    }
+    if (shouldStopBootstrapRefresh()) {
+      stopBootstrapRefresh();
+    }
     if (shouldFreezeHistoricalView()) {
       freezeHistoricalView("refresh_state");
       return;
@@ -17303,6 +17523,7 @@ ${att.content || ""}
     uiState.isCurrentView = true;
     uiState.activeTool = false;
     uiState.completedTool = true;
+    uiState.pendingView = false;
     uiState.submittedMessage = previewText;
     uiState.submittedAt = (/* @__PURE__ */ new Date()).toLocaleTimeString();
     uiState.latestAiMessage = "";
@@ -17325,7 +17546,7 @@ ${att.content || ""}
         uiState.anyWaiting = nextState.anyWaiting;
         uiState.waiting = nextState.waiting && nextState.isCurrentView;
         uiState.isCurrentView = nextState.isCurrentView;
-        uiState.latestAiMessage = getLatestAiMessage(nextState.events);
+        uiState.latestAiMessage = nextState.latestAiMessage || getLatestAiMessage(nextState.events);
         const pm = nextState.previewMessage.trim();
         if (pm) {
           uiState.submittedMessage = pm;
@@ -17348,6 +17569,7 @@ ${att.content || ""}
       uiState.waiting = true;
       uiState.activeTool = true;
       uiState.completedTool = false;
+      uiState.pendingView = false;
       uiState.submittedMessage = "";
       uiState.submittedAt = "";
       uiState.error = error40 instanceof Error ? error40.message : "\u53D1\u9001\u5931\u8D25";
@@ -17782,6 +18004,7 @@ ${att.content || ""}
   });
   app.onteardown = async () => {
     teardownCompleted = true;
+    stopBootstrapRefresh();
     if (pollTimer) {
       window.clearInterval(pollTimer);
       pollTimer = null;
@@ -17791,6 +18014,29 @@ ${att.content || ""}
       instanceId: uiState.instanceId || ""
     });
     return {};
+  };
+  app.ontoolinputpartial = (params) => {
+    if (historicalViewFrozen) {
+      return;
+    }
+    const partialConversationId = extractConversationIdFromArgs(params?.arguments);
+    const partialRouteHint = extractRouteHintFromArgs(params?.arguments);
+    let changed = false;
+    if (partialConversationId && partialConversationId !== uiState.conversationId) {
+      uiState.conversationId = partialConversationId;
+      changed = true;
+    }
+    if (partialRouteHint && partialRouteHint !== uiState.routeHint) {
+      uiState.routeHint = partialRouteHint;
+      changed = true;
+    }
+    if (changed) {
+      reportDiagnosticsEvent("ui_tool_input_partial", {
+        hasConversationId: Boolean(uiState.conversationId),
+        hasRouteHint: Boolean(uiState.routeHint)
+      });
+      ensureBootstrapRefresh("tool_input_partial");
+    }
   };
   app.ontoolinput = (params) => {
     if (historicalViewFrozen) {
@@ -17803,6 +18049,7 @@ ${att.content || ""}
     uiState.conversationId = explicitConversationId || uiState.conversationId;
     uiState.routeHint = nextRouteHint;
     if (isHistoricalProbe) {
+      uiState.pendingView = false;
       uiState.anyWaiting = false;
       uiState.waiting = false;
       uiState.isCurrentView = false;
@@ -17825,6 +18072,7 @@ ${att.content || ""}
       return;
     }
     if (isRepeatedToolInput) {
+      uiState.pendingView = false;
       uiState.anyWaiting = false;
       uiState.waiting = false;
       uiState.isCurrentView = false;
@@ -17847,14 +18095,7 @@ ${att.content || ""}
       return;
     }
     acceptedToolInputForInstance = true;
-    uiState.hydrated = false;
-    uiState.anyWaiting = false;
-    uiState.activeTool = false;
-    uiState.waiting = false;
-    uiState.isCurrentView = false;
-    uiState.completedTool = false;
-    uiState.submittedMessage = "";
-    uiState.submittedAt = "";
+    enterPendingViewShell("tool_input");
     reportDiagnosticsEvent("ui_tool_input", {
       toolName: app.getHostContext()?.toolInfo?.tool?.name || "",
       hasConversationId: Boolean(uiState.conversationId),
@@ -17869,6 +18110,7 @@ ${att.content || ""}
       });
       render();
     });
+    ensureBootstrapRefresh("tool_input");
   };
   app.ontoolresult = (result) => {
     if (historicalViewFrozen) {
@@ -17879,10 +18121,11 @@ ${att.content || ""}
     if (stateFromResult) {
       const resultPreviewMessage = stateFromResult.previewMessage.trim();
       uiState.hydrated = true;
+      uiState.pendingView = false;
       uiState.anyWaiting = stateFromResult.anyWaiting;
       uiState.waiting = stateFromResult.waiting && stateFromResult.isCurrentView;
       uiState.isCurrentView = stateFromResult.isCurrentView;
-      uiState.latestAiMessage = getLatestAiMessage(stateFromResult.events) || uiState.latestAiMessage;
+      uiState.latestAiMessage = stateFromResult.latestAiMessage || getLatestAiMessage(stateFromResult.events) || uiState.latestAiMessage;
       if (resultPreviewMessage) {
         uiState.submittedMessage = resultPreviewMessage;
       }
@@ -17918,6 +18161,7 @@ ${att.content || ""}
     if (historicalViewFrozen) {
       return;
     }
+    uiState.pendingView = false;
     uiState.anyWaiting = false;
     uiState.waiting = false;
     uiState.activeTool = false;
@@ -17940,12 +18184,17 @@ ${att.content || ""}
       if (instanceChanged) {
         acceptedToolInputForInstance = false;
       }
-      if (uiState.completedTool && !uiState.sending) {
+      if (instanceChanged && isCheckMessagesToolContext(hostContext) && !uiState.sending) {
+        enterPendingViewShell("host_context_changed_instance", { resetRouting: true });
+      }
+      if (instanceChanged && uiState.completedTool && !uiState.sending) {
         uiState.waiting = false;
         uiState.activeTool = false;
         uiState.isCurrentView = false;
       }
-      render();
+      if (instanceChanged || uiState.pendingView || !uiState.hydrated) {
+        render();
+      }
       void refreshState().catch((err) => {
         reportDiagnosticsEvent("ui_refresh_failed", {
           source: "host_context_changed",
@@ -17953,6 +18202,7 @@ ${att.content || ""}
         });
         render();
       });
+      ensureBootstrapRefresh("host_context_changed");
       return;
     }
     render();
@@ -17974,6 +18224,7 @@ ${att.content || ""}
     lastSyncedSize = { width: 0, height: 0 };
     render();
     await refreshState();
+    ensureBootstrapRefresh("start");
     pollTimer = window.setInterval(() => {
       void refreshState().catch((err) => {
         uiState.connected = false;

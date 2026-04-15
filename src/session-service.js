@@ -153,6 +153,28 @@ function createSessionState(conversationId) {
   };
 }
 
+function getSessionLatestAiMessage(session) {
+  const latestAiResponse = Array.isArray(session?.aiResponses) && session.aiResponses.length > 0
+    ? session.aiResponses[session.aiResponses.length - 1]
+    : null;
+  if (typeof latestAiResponse?.text === "string" && latestAiResponse.text.trim()) {
+    return latestAiResponse.text.trim();
+  }
+
+  if (!Array.isArray(session?.chatEvents)) {
+    return "";
+  }
+
+  for (let index = session.chatEvents.length - 1; index >= 0; index -= 1) {
+    const event = session.chatEvents[index];
+    if (event?.role === "ai" && typeof event.text === "string" && event.text.trim()) {
+      return event.text.trim();
+    }
+  }
+
+  return "";
+}
+
 function createSql(db) {
   return {
     upsertSession: db.prepare(`
@@ -897,8 +919,10 @@ export class SessionService {
     instanceId,
     clientSessionId,
     aiResponseHint,
+    resourceUri,
     allowClientSessionFallback = true,
     bindInstance = false,
+    includeEvents = false,
   } = {}) {
     const session = this.resolveSession({
       conversationId,
@@ -911,18 +935,23 @@ export class SessionService {
 
     if (!session) {
       return {
-        conversationId: normalizeConversationId(conversationId) || "",
+        conversationId: "",
         anyWaiting: false,
         waiting: false,
         isCurrentView: false,
         queueLength: 0,
+        eventCount: 0,
+        latestAiMessage: "",
         events: [],
         previewMessage: "",
       };
     }
 
     if (bindInstance && normalizedInstanceId) {
-      this.bindAppInstanceToSession(session, normalizedInstanceId);
+      this.bindAppInstanceToSession(session, normalizedInstanceId, {
+        resourceUri,
+        routeHint: aiResponseHint,
+      });
     }
 
     const isCurrentInstanceWaiting =
@@ -939,7 +968,9 @@ export class SessionService {
       waiting: isCurrentInstanceWaiting,
       isCurrentView,
       queueLength: session.messageQueue.length,
-      events: session.chatEvents,
+      eventCount: session.chatEvents.length,
+      latestAiMessage: getSessionLatestAiMessage(session),
+      events: includeEvents ? session.chatEvents : [],
       previewMessage: normalizedInstanceId ? session.toolPreviewByInstanceId.get(normalizedInstanceId) || "" : "",
     };
   }

@@ -34,6 +34,10 @@ const LOCAL_SEND_TIMEOUT_MS = 8000;
 const LOCAL_UPLOAD_TIMEOUT_MS = 20000;
 const LOCAL_DIAGNOSTIC_TIMEOUT_MS = 1500;
 const FILE_MENTION_SEARCH_DEBOUNCE_MS = 60;
+const BOOTSTRAP_REFRESH_INTERVAL_MS = 160;
+const BOOTSTRAP_REFRESH_MAX_ATTEMPTS = 12;
+const USE_MANUAL_SIZE_SYNC = false;
+const USE_COLLAPSE_SIZE_SYNC = true;
 const CURRENT_APP_RESOURCE_URI = (() => {
   if (typeof window.__XIAOHAHA_APP_RESOURCE_URI === "string" && window.__XIAOHAHA_APP_RESOURCE_URI.trim()) {
     return window.__XIAOHAHA_APP_RESOURCE_URI.trim();
@@ -150,11 +154,12 @@ inputShell.classList.remove("xh-pseudo-focus");
    MCP App + State
    ═══════════════════════════════════════════════════ */
 
-const app = new App({ name: "xiaohaha-chat-ui", version: "1.0.8" }, {}, { autoResize: false });
+const app = new App({ name: "xiaohaha-chat-ui", version: "1.0.8" }, {}, { autoResize: true });
 
 const uiState = {
   connected: false,
   hydrated: false,
+  pendingView: false,
   instanceId: "",
   conversationId: "",
   routeHint: "",
@@ -182,6 +187,9 @@ let teardownRequested = false;
 let teardownCompleted = false;
 let acceptedToolInputForInstance = false;
 let historicalViewFrozen = false;
+let bootstrapRefreshTimer = null;
+let bootstrapRefreshAttempts = 0;
+let lastRenderedPreviewText = "";
 
 function installRichInputBridge(editorEl) {
   let disabled = false;
@@ -293,21 +301,36 @@ function autoResizeInput(force = false) {
   )}px`;
 }
 
+function measureIntrinsicHeight(element) {
+  if (!element) {
+    return 0;
+  }
+
+  return Math.max(
+    Number(element.scrollHeight) || 0,
+    Number(element.offsetHeight) || 0,
+    Math.ceil(element.getBoundingClientRect?.().height || 0)
+  );
+}
+
 function measureAppSize() {
   const hostRoot = root.firstElementChild || root;
-  const width = Math.ceil(root.getBoundingClientRect().width || window.innerWidth);
+  const widthCandidates = [
+    root.getBoundingClientRect().width,
+    hostRoot?.getBoundingClientRect?.().width,
+    root.scrollWidth,
+    hostRoot?.scrollWidth,
+    window.innerWidth,
+  ].filter((value) => Number.isFinite(value) && value > 0);
+  const width = Math.ceil(Math.max(...widthCandidates, 1));
+  const hostHeight = measureIntrinsicHeight(hostRoot);
   const heightCandidates = [
-    root.scrollHeight,
-    root.offsetHeight,
-    root.getBoundingClientRect().height,
-    hostRoot?.scrollHeight,
-    hostRoot?.offsetHeight,
-    hostRoot?.getBoundingClientRect?.().height,
-    document.body?.scrollHeight,
-    document.body?.offsetHeight,
-    document.body?.getBoundingClientRect?.().height,
+    hostHeight,
+    hostRoot === root ? 0 : measureIntrinsicHeight(root),
   ].filter((value) => Number.isFinite(value) && value > 0);
 
+  // 只用应用根节点的固有内容高度，避免 iframe 已经被宿主拉高后，
+  // body / viewport 的高度反向污染测量结果，导致历史卡片收起后仍保留大块空白。
   const height = Math.ceil(Math.max(...heightCandidates, 1));
 
   return {
@@ -316,7 +339,7 @@ function measureAppSize() {
   };
 }
 
-function flushSizeSync() {
+function sendMeasuredSizeChanged() {
   if (!uiState.connected || document.visibilityState === "hidden") {
     return;
   }
@@ -330,7 +353,19 @@ function flushSizeSync() {
   void app.sendSizeChanged(nextSize).catch(() => {});
 }
 
+function flushSizeSync() {
+  if (!USE_MANUAL_SIZE_SYNC) {
+    return;
+  }
+
+  sendMeasuredSizeChanged();
+}
+
 function scheduleSizeSync() {
+  if (!USE_MANUAL_SIZE_SYNC) {
+    return;
+  }
+
   if (sizeSyncScheduled) {
     return;
   }
@@ -345,12 +380,16 @@ function scheduleSizeSync() {
 }
 
 function scheduleCollapseSizeSyncBurst() {
-  flushSizeSync();
+  if (!USE_COLLAPSE_SIZE_SYNC) {
+    return;
+  }
+
+  sendMeasuredSizeChanged();
   window.requestAnimationFrame(() => {
-    flushSizeSync();
+    sendMeasuredSizeChanged();
   });
   window.setTimeout(() => {
-    flushSizeSync();
+    sendMeasuredSizeChanged();
   }, 32);
 }
 
@@ -361,6 +400,69 @@ function shouldShowComposer() {
     uiState.sending
     || (uiState.waiting && !uiState.submittedMessage)
   );
+}
+
+function shouldStopBootstrapRefresh() {
+  return historicalViewFrozen
+    || teardownCompleted
+    || !uiState.connected
+    || (uiState.hydrated && (
+      uiState.isCurrentView
+      || Boolean(uiState.submittedMessage)
+    ));
+}
+
+function stopBootstrapRefresh() {
+  if (bootstrapRefreshTimer) {
+    window.clearInterval(bootstrapRefreshTimer);
+    bootstrapRefreshTimer = null;
+  }
+  bootstrapRefreshAttempts = 0;
+}
+
+function runBootstrapRefresh(source) {
+  if (shouldStopBootstrapRefresh()) {
+    stopBootstrapRefresh();
+    return;
+  }
+
+  bootstrapRefreshAttempts += 1;
+  const instanceChanged = syncHostContext(app.getHostContext());
+  if (instanceChanged) {
+    acceptedToolInputForInstance = false;
+  }
+
+  void refreshState().catch(() => {});
+
+  if (bootstrapRefreshAttempts >= BOOTSTRAP_REFRESH_MAX_ATTEMPTS) {
+    reportDiagnosticsEvent("ui_bootstrap_refresh_exhausted", {
+      source,
+      instanceId: uiState.instanceId || "",
+      conversationId: uiState.conversationId || "",
+    });
+    stopBootstrapRefresh();
+  }
+}
+
+function ensureBootstrapRefresh(source) {
+  if (shouldStopBootstrapRefresh()) {
+    stopBootstrapRefresh();
+    return;
+  }
+
+  if (!bootstrapRefreshTimer) {
+    bootstrapRefreshAttempts = 0;
+    bootstrapRefreshTimer = window.setInterval(() => {
+      runBootstrapRefresh(source);
+    }, BOOTSTRAP_REFRESH_INTERVAL_MS);
+    reportDiagnosticsEvent("ui_bootstrap_refresh_started", {
+      source,
+      instanceId: uiState.instanceId || "",
+      conversationId: uiState.conversationId || "",
+    });
+  }
+
+  runBootstrapRefresh(source);
 }
 
 function shouldTeardownHistoricalView() {
@@ -382,6 +484,34 @@ function shouldFreezeHistoricalView() {
     && !uiState.sending;
 }
 
+function isCheckMessagesToolContext(hostContext = app.getHostContext()) {
+  return hostContext?.toolInfo?.tool?.name === "check_messages";
+}
+
+function enterPendingViewShell(source, options = {}) {
+  const resetRouting = Boolean(options.resetRouting);
+  uiState.hydrated = false;
+  uiState.pendingView = true;
+  uiState.anyWaiting = false;
+  uiState.waiting = false;
+  uiState.isCurrentView = false;
+  uiState.activeTool = false;
+  uiState.completedTool = false;
+  uiState.error = "";
+  uiState.submittedMessage = "";
+  uiState.submittedAt = "";
+  if (resetRouting) {
+    uiState.conversationId = "";
+    uiState.routeHint = "";
+  }
+  reportDiagnosticsEvent("ui_pending_shell_entered", {
+    source,
+    toolName: app.getHostContext()?.toolInfo?.tool?.name || "",
+    instanceId: uiState.instanceId || "",
+    conversationId: uiState.conversationId || "",
+  });
+}
+
 function freezeHistoricalView(source) {
   if (historicalViewFrozen) {
     return;
@@ -392,6 +522,7 @@ function freezeHistoricalView(source) {
     window.clearInterval(pollTimer);
     pollTimer = null;
   }
+  stopBootstrapRefresh();
 
   uiState.waiting = false;
   uiState.activeTool = false;
@@ -414,6 +545,7 @@ function freezeSubmittedView(source) {
     window.clearInterval(pollTimer);
     pollTimer = null;
   }
+  stopBootstrapRefresh();
 
   uiState.waiting = false;
   uiState.activeTool = false;
@@ -1025,13 +1157,23 @@ function syncHostContext(hostContext) {
 /* ── State extraction (from MCP results) ── */
 
 function normalizeState(state) {
+  const events = Array.isArray(state?.events) ? state.events : [];
+  const eventCount = Number.isFinite(state?.eventCount)
+    ? Math.max(0, Math.floor(state.eventCount))
+    : events.length;
+  const latestAiMessage = typeof state?.latestAiMessage === "string" && state.latestAiMessage.trim()
+    ? state.latestAiMessage.trim()
+    : getLatestAiMessage(events);
+
   return {
     conversationId: typeof state?.conversationId === "string" ? state.conversationId : "",
     anyWaiting: Boolean(state?.anyWaiting),
     waiting: Boolean(state?.waiting),
     isCurrentView: Boolean(state?.isCurrentView),
     previewMessage: typeof state?.previewMessage === "string" ? state.previewMessage : "",
-    events: Array.isArray(state?.events) ? state.events : [],
+    eventCount,
+    latestAiMessage,
+    events,
   };
 }
 
@@ -1042,6 +1184,21 @@ function getLatestAiMessage(events) {
     if (ev?.role === "ai" && typeof ev?.text === "string" && ev.text.trim()) return ev.text.trim();
   }
   return "";
+}
+
+function hasResolvedChatState(state) {
+  return Boolean(
+    state
+    && (
+      state.conversationId
+      || state.anyWaiting
+      || state.waiting
+      || state.isCurrentView
+      || state.eventCount > 0
+      || state.latestAiMessage
+      || state.previewMessage
+    )
+  );
 }
 
 function extractState(result) {
@@ -1090,12 +1247,22 @@ function isRoutingReady() {
   return Boolean(uiState.instanceId || uiState.conversationId || uiState.routeHint);
 }
 
+function shouldAttemptBindCurrentView() {
+  return Boolean(
+    uiState.pendingView
+    && uiState.instanceId
+    && (uiState.conversationId || uiState.routeHint)
+  );
+}
+
 async function refreshStateFromLocalHttp() {
   const payload = await callLocalJson("/app/state", {
     params: {
       instanceId: uiState.instanceId || undefined,
       conversationId: uiState.conversationId || undefined,
       routeHint: uiState.routeHint || undefined,
+      resourceUri: CURRENT_APP_RESOURCE_URI || undefined,
+      bindInstance: shouldAttemptBindCurrentView() ? "1" : undefined,
     },
   });
   return normalizeState(payload?.state);
@@ -1108,6 +1275,8 @@ async function refreshStateFromServerTool() {
       instance_id: uiState.instanceId || undefined,
       conversation_id: uiState.conversationId || undefined,
       route_hint: uiState.routeHint || undefined,
+      resource_uri: CURRENT_APP_RESOURCE_URI || undefined,
+      bind_instance: shouldAttemptBindCurrentView() || undefined,
     },
   }, {
     timeout: LOCAL_HTTP_TIMEOUT_MS,
@@ -1156,22 +1325,24 @@ async function sendAppMessageViaServerTool(message, previewMessage, attachmentsL
 
 function render() {
   const showPreview = uiState.hydrated && Boolean(uiState.submittedMessage);
-  const showComposer = uiState.hydrated && shouldShowComposer();
+  const showComposer = uiState.pendingView || (uiState.hydrated && shouldShowComposer());
   const composerCollapsed = lastRenderedComposerVisible && !showComposer;
   composerLayer.hidden = !showComposer;
   composerForm.hidden = !showComposer;
   sentPreview.hidden = !showPreview;
   errorBanner.hidden = !uiState.error;
   errorBanner.textContent = uiState.error;
-  messageInput.disabled = uiState.sending || !isRoutingReady();
-  messageInput.placeholder = isRoutingReady()
-    ? "继续给 Agent 发消息... (/ 调出命令)"
-    : "会话初始化中，请稍候...";
+  messageInput.disabled = uiState.sending || uiState.pendingView || !isRoutingReady();
+  messageInput.placeholder = uiState.pendingView
+    ? "会话同步中，请稍候..."
+    : isRoutingReady()
+      ? "继续给 Agent 发消息... (/ 调出命令)"
+      : "会话初始化中，请稍候...";
 
-  if (showPreview) {
-    sentPreview.innerHTML = escapeHtml(uiState.submittedMessage);
-  } else {
-    sentPreview.innerHTML = "";
+  const nextPreviewText = showPreview ? uiState.submittedMessage : "";
+  if (nextPreviewText !== lastRenderedPreviewText) {
+    sentPreview.innerHTML = nextPreviewText ? escapeHtml(nextPreviewText) : "";
+    lastRenderedPreviewText = nextPreviewText;
   }
 
   updateFakeCaret();
@@ -1192,23 +1363,14 @@ async function refreshState() {
     return;
   }
 
+  const wasPendingView = uiState.pendingView;
   let nextState = null;
   let localState = null;
   try {
     localState = await refreshStateFromLocalHttp();
   } catch {}
 
-  const hasResolvedLocalState = Boolean(
-    localState
-    && (
-      localState.conversationId
-      || localState.anyWaiting
-      || localState.waiting
-      || localState.isCurrentView
-      || (Array.isArray(localState.events) && localState.events.length > 0)
-      || localState.previewMessage
-    )
-  );
+  const hasResolvedLocalState = hasResolvedChatState(localState);
 
   if (hasResolvedLocalState) {
     nextState = localState;
@@ -1221,9 +1383,29 @@ async function refreshState() {
   }
   if (!nextState) throw new Error("Failed to parse chat state from MCP response.");
 
+  const prevRenderState = {
+    connected: uiState.connected,
+    hydrated: uiState.hydrated,
+    pendingView: uiState.pendingView,
+    waiting: uiState.waiting,
+    isCurrentView: uiState.isCurrentView,
+    activeTool: uiState.activeTool,
+    error: uiState.error,
+    sending: uiState.sending,
+    submittedMessage: uiState.submittedMessage,
+    instanceId: uiState.instanceId,
+    conversationId: uiState.conversationId,
+    routeHint: uiState.routeHint,
+  };
   const previewMessage = nextState.previewMessage.trim();
   uiState.connected = true;
   uiState.hydrated = true;
+  uiState.pendingView = Boolean(
+    wasPendingView
+    && !nextState.isCurrentView
+    && !previewMessage
+    && !uiState.completedTool
+  );
   uiState.conversationId = nextState.conversationId || uiState.conversationId;
   uiState.anyWaiting = nextState.anyWaiting;
   uiState.waiting = nextState.waiting && nextState.isCurrentView;
@@ -1235,7 +1417,7 @@ async function refreshState() {
     uiState.activeTool = false;
   }
   uiState.error = "";
-  uiState.latestAiMessage = getLatestAiMessage(nextState.events);
+  uiState.latestAiMessage = nextState.latestAiMessage || getLatestAiMessage(nextState.events);
   if (uiState.latestAiMessage) {
     uiState.routeHint = uiState.latestAiMessage;
   }
@@ -1247,7 +1429,27 @@ async function refreshState() {
     uiState.submittedMessage = "";
     uiState.submittedAt = "";
   }
-  render();
+  const nextRenderState = {
+    connected: uiState.connected,
+    hydrated: uiState.hydrated,
+    pendingView: uiState.pendingView,
+    waiting: uiState.waiting,
+    isCurrentView: uiState.isCurrentView,
+    activeTool: uiState.activeTool,
+    error: uiState.error,
+    sending: uiState.sending,
+    submittedMessage: uiState.submittedMessage,
+    instanceId: uiState.instanceId,
+    conversationId: uiState.conversationId,
+    routeHint: uiState.routeHint,
+  };
+  const shouldRender = Object.keys(nextRenderState).some((key) => nextRenderState[key] !== prevRenderState[key]);
+  if (shouldRender) {
+    render();
+  }
+  if (shouldStopBootstrapRefresh()) {
+    stopBootstrapRefresh();
+  }
   if (shouldFreezeHistoricalView()) {
     freezeHistoricalView("refresh_state");
     return;
@@ -1330,12 +1532,13 @@ async function sendMessage() {
 
   uiState.sending = true;
   uiState.error = "";
-  uiState.anyWaiting = false;
-  uiState.waiting = false;
-  uiState.isCurrentView = true;
-  uiState.activeTool = false;
-  uiState.completedTool = true;
-  uiState.submittedMessage = previewText;
+    uiState.anyWaiting = false;
+    uiState.waiting = false;
+    uiState.isCurrentView = true;
+    uiState.activeTool = false;
+    uiState.completedTool = true;
+    uiState.pendingView = false;
+    uiState.submittedMessage = previewText;
   uiState.submittedAt = new Date().toLocaleTimeString();
   uiState.latestAiMessage = "";
   reportDiagnosticsEvent("ui_send_message_started", {
@@ -1362,7 +1565,7 @@ async function sendMessage() {
       uiState.anyWaiting = nextState.anyWaiting;
       uiState.waiting = nextState.waiting && nextState.isCurrentView;
       uiState.isCurrentView = nextState.isCurrentView;
-      uiState.latestAiMessage = getLatestAiMessage(nextState.events);
+      uiState.latestAiMessage = nextState.latestAiMessage || getLatestAiMessage(nextState.events);
       const pm = nextState.previewMessage.trim();
       if (pm) {
         uiState.submittedMessage = pm;
@@ -1386,6 +1589,7 @@ async function sendMessage() {
     uiState.waiting = true;
     uiState.activeTool = true;
     uiState.completedTool = false;
+    uiState.pendingView = false;
     uiState.submittedMessage = "";
     uiState.submittedAt = "";
     uiState.error = error instanceof Error ? error.message : "发送失败";
@@ -1841,6 +2045,7 @@ document.addEventListener("click", (e) => {
 
 app.onteardown = async () => {
   teardownCompleted = true;
+  stopBootstrapRefresh();
   if (pollTimer) {
     window.clearInterval(pollTimer);
     pollTimer = null;
@@ -1850,6 +2055,34 @@ app.onteardown = async () => {
     instanceId: uiState.instanceId || "",
   });
   return {};
+};
+
+app.ontoolinputpartial = (params) => {
+  if (historicalViewFrozen) {
+    return;
+  }
+
+  const partialConversationId = extractConversationIdFromArgs(params?.arguments);
+  const partialRouteHint = extractRouteHintFromArgs(params?.arguments);
+  let changed = false;
+
+  if (partialConversationId && partialConversationId !== uiState.conversationId) {
+    uiState.conversationId = partialConversationId;
+    changed = true;
+  }
+
+  if (partialRouteHint && partialRouteHint !== uiState.routeHint) {
+    uiState.routeHint = partialRouteHint;
+    changed = true;
+  }
+
+  if (changed) {
+    reportDiagnosticsEvent("ui_tool_input_partial", {
+      hasConversationId: Boolean(uiState.conversationId),
+      hasRouteHint: Boolean(uiState.routeHint),
+    });
+    ensureBootstrapRefresh("tool_input_partial");
+  }
 };
 
 app.ontoolinput = (params) => {
@@ -1865,6 +2098,7 @@ app.ontoolinput = (params) => {
   uiState.routeHint = nextRouteHint;
 
   if (isHistoricalProbe) {
+    uiState.pendingView = false;
     uiState.anyWaiting = false;
     uiState.waiting = false;
     uiState.isCurrentView = false;
@@ -1888,6 +2122,7 @@ app.ontoolinput = (params) => {
   }
 
   if (isRepeatedToolInput) {
+    uiState.pendingView = false;
     uiState.anyWaiting = false;
     uiState.waiting = false;
     uiState.isCurrentView = false;
@@ -1911,13 +2146,8 @@ app.ontoolinput = (params) => {
   }
 
   acceptedToolInputForInstance = true;
-  // 不在收到 tool_input 的瞬间乐观展开 composer，先等服务端确认这张卡片真的是当前等待中的那张。
-  uiState.hydrated = false;
-  uiState.anyWaiting = false;
-  uiState.activeTool = false;
-  uiState.waiting = false;
-  uiState.isCurrentView = false;
-  uiState.completedTool = false; uiState.submittedMessage = ""; uiState.submittedAt = "";
+  // 最新卡片先展示一个稳定的 pending shell，避免在 refreshState 返回前整块区域变成空白。
+  enterPendingViewShell("tool_input");
   reportDiagnosticsEvent("ui_tool_input", {
     toolName: app.getHostContext()?.toolInfo?.tool?.name || "",
     hasConversationId: Boolean(uiState.conversationId),
@@ -1930,8 +2160,9 @@ app.ontoolinput = (params) => {
       source: "tool_input",
       message: uiState.error,
     });
-    render();
-  });
+      render();
+    });
+  ensureBootstrapRefresh("tool_input");
 };
 
 app.ontoolresult = (result) => {
@@ -1944,10 +2175,11 @@ app.ontoolresult = (result) => {
   if (stateFromResult) {
     const resultPreviewMessage = stateFromResult.previewMessage.trim();
     uiState.hydrated = true;
+    uiState.pendingView = false;
     uiState.anyWaiting = stateFromResult.anyWaiting;
     uiState.waiting = stateFromResult.waiting && stateFromResult.isCurrentView;
     uiState.isCurrentView = stateFromResult.isCurrentView;
-    uiState.latestAiMessage = getLatestAiMessage(stateFromResult.events) || uiState.latestAiMessage;
+    uiState.latestAiMessage = stateFromResult.latestAiMessage || getLatestAiMessage(stateFromResult.events) || uiState.latestAiMessage;
     if (resultPreviewMessage) {
       uiState.submittedMessage = resultPreviewMessage;
     }
@@ -1985,6 +2217,7 @@ app.ontoolcancelled = () => {
     return;
   }
 
+  uiState.pendingView = false;
   uiState.anyWaiting = false; uiState.waiting = false; uiState.activeTool = false;
   reportDiagnosticsEvent("ui_tool_cancelled", {
     toolName: app.getHostContext()?.toolInfo?.tool?.name || "",
@@ -2007,15 +2240,23 @@ app.onhostcontextchanged = (hostContext) => {
       acceptedToolInputForInstance = false;
     }
 
+    if (instanceChanged && isCheckMessagesToolContext(hostContext) && !uiState.sending) {
+      // 宿主偶尔会先切换到新的 check_messages 实例，再晚一点才补上 tool_input。
+      // 这里先乐观地拉起 pending shell，避免最新聊天面板在这段窗口里整块不显示。
+      enterPendingViewShell("host_context_changed_instance", { resetRouting: true });
+    }
+
     // 宿主切换上下文时，历史卡片会先收到一轮 host_context_changed。
-    // 这里先把已完成卡片的 composer 本地收起，避免在 refreshState 修正前闪一下。
-    if (uiState.completedTool && !uiState.sending) {
+    // 只有实例真的切换时才提前收起，避免当前等待中的卡片在普通上下文刷新时闪烁。
+    if (instanceChanged && uiState.completedTool && !uiState.sending) {
       uiState.waiting = false;
       uiState.activeTool = false;
       uiState.isCurrentView = false;
     }
 
-    render();
+    if (instanceChanged || uiState.pendingView || !uiState.hydrated) {
+      render();
+    }
     void refreshState().catch((err) => {
       reportDiagnosticsEvent("ui_refresh_failed", {
         source: "host_context_changed",
@@ -2023,6 +2264,7 @@ app.onhostcontextchanged = (hostContext) => {
       });
       render();
     });
+    ensureBootstrapRefresh("host_context_changed");
     return;
   }
 
@@ -2050,6 +2292,7 @@ async function start() {
   lastSyncedSize = { width: 0, height: 0 };
   render();
   await refreshState();
+  ensureBootstrapRefresh("start");
   pollTimer = window.setInterval(() => {
     void refreshState().catch((err) => {
       uiState.connected = false; uiState.error = err instanceof Error ? err.message : "刷新失败"; render();

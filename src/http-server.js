@@ -665,19 +665,34 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
       : typeof req.query.route_hint === "string"
         ? req.query.route_hint
         : "";
+    const resourceUri = typeof req.query.resourceUri === "string"
+      ? req.query.resourceUri
+      : typeof req.query.resource_uri === "string"
+        ? req.query.resource_uri
+        : "";
+    const bindInstance = String(
+      typeof req.query.bindInstance === "string"
+        ? req.query.bindInstance
+        : typeof req.query.bind_instance === "string"
+          ? req.query.bind_instance
+          : ""
+    ) === "1";
 
     const state = sessionService.getChatState({
       conversationId,
       instanceId,
       aiResponseHint: routeHint,
+      resourceUri,
       allowClientSessionFallback: false,
-      bindInstance: false,
+      bindInstance,
     });
 
     recordDiagnostic("app_state_query", {
       conversationId,
       instanceId,
       routeHint,
+      resourceUri,
+      bindInstance,
       anyWaiting: state.anyWaiting,
       waiting: state.waiting,
       isCurrentView: state.isCurrentView,
