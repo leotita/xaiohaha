@@ -6,6 +6,7 @@ export class FileMentionPalette {
     this.anchorEl = null;
     this.visible = false;
     this.loading = false;
+    this.errorMessage = "";
     this.query = "";
     this.items = [];
     this.selectedIndex = -1;
@@ -23,6 +24,7 @@ export class FileMentionPalette {
   showLoading(query = "") {
     this.visible = true;
     this.loading = true;
+    this.errorMessage = "";
     this.query = query;
     this.items = [];
     this.selectedIndex = -1;
@@ -33,6 +35,7 @@ export class FileMentionPalette {
   showItems(items, query = "") {
     this.visible = true;
     this.loading = false;
+    this.errorMessage = "";
     this.query = query;
     this.items = Array.isArray(items) ? items : [];
     this.selectedIndex = this.items.length > 0 ? 0 : -1;
@@ -40,9 +43,21 @@ export class FileMentionPalette {
     this.render();
   }
 
+  showError(message, query = "") {
+    this.visible = true;
+    this.loading = false;
+    this.errorMessage = String(message || "").trim() || "搜索项目文件失败";
+    this.query = query;
+    this.items = [];
+    this.selectedIndex = -1;
+    this.el.hidden = false;
+    this.render();
+  }
+
   hide() {
     this.visible = false;
     this.loading = false;
+    this.errorMessage = "";
     this.query = "";
     this.items = [];
     this.selectedIndex = -1;
@@ -74,6 +89,11 @@ export class FileMentionPalette {
 
     if (this.loading) {
       this.el.innerHTML = `<div class="xh-file-empty">搜索项目文件...</div>`;
+      return;
+    }
+
+    if (this.errorMessage) {
+      this.el.innerHTML = `<div class="xh-file-empty">${escapeHtml(this.errorMessage)}</div>`;
       return;
     }
 

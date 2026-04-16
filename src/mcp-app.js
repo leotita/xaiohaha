@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
+import { constants as FS_CONSTANTS } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -18,6 +20,38 @@ const PROJECT_FILE_SEARCH_LIMIT = 20;
 const PROJECT_FILE_CACHE_TTL_MS = 10_000;
 const PROJECT_FILE_QUERY_CACHE_TTL_MS = 5_000;
 const RUNTIME_WORKSPACE_MARKER = "/runtime/workspace/";
+const PROJECT_ROOT_DISCOVERY_LIMIT = 12;
+const PROJECT_ROOT_STRONG_WORKSPACE_MARKERS = [
+  ".git",
+  ".hg",
+  ".svn",
+  "pnpm-workspace.yaml",
+  "turbo.json",
+  "nx.json",
+  "lerna.json",
+  "rush.json",
+];
+const PROJECT_ROOT_WEAK_WORKSPACE_MARKERS = [
+  ".cursor",
+  ".vscode",
+];
+const PROJECT_ROOT_PROJECT_MARKERS = [
+  "package.json",
+  "pubspec.yaml",
+  "Cargo.toml",
+  "go.mod",
+  "pom.xml",
+  "build.gradle",
+  "settings.gradle",
+  "Gemfile",
+  "pyproject.toml",
+  "requirements.txt",
+];
+const MACOS_PROTECTED_DIR_NAMES = new Set([
+  "Desktop",
+  "Documents",
+  "Downloads",
+]);
 
 const SKIP_DIRS = new Set([
   "node_modules", ".git", "dist", ".next", "build", "coverage",
@@ -51,18 +85,268 @@ const IMAGE_MIME_BY_EXT = new Map([
   ["bmp", "image/bmp"],
 ]);
 
-let projectFileCache = {
-  expiresAt: 0,
-  entries: [],
-};
+const projectFileCache = new Map();
+const projectFileSearchCache = new Map();
 
-let projectFileSearchCache = {
-  expiresAt: 0,
-  query: "",
-  entries: [],
-};
+function normalizeWorkspaceInput(value) {
+  let normalized = String(value || "").trim();
+  if (!normalized) {
+    return "";
+  }
 
-function normalizeProjectPath(relPath) {
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(normalized) && !normalized.startsWith("file://")) {
+    return "";
+  }
+
+  if (normalized.startsWith("file://")) {
+    try {
+      normalized = decodeURIComponent(new URL(normalized).pathname);
+    } catch {}
+  }
+
+  if (!path.isAbsolute(normalized)) {
+    return "";
+  }
+
+  return path.resolve(normalized);
+}
+
+function isPermissionDeniedError(error) {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  if (error.code === "EACCES" || error.code === "EPERM") {
+    return true;
+  }
+
+  const text = `${error.message || ""}\n${error.stderr || ""}\n${error.stdout || ""}`.toLowerCase();
+  return text.includes("permission denied") || text.includes("operation not permitted");
+}
+
+function isLikelyMacosProtectedDirectory(projectRoot) {
+  const homeDir = normalizeWorkspaceInput(os.homedir());
+  const normalizedProjectRoot = normalizeWorkspaceInput(projectRoot);
+  if (!homeDir || !normalizedProjectRoot) {
+    return false;
+  }
+
+  const relativePath = path.relative(homeDir, normalizedProjectRoot);
+  if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    return false;
+  }
+
+  const topLevelDir = relativePath.split(path.sep).filter(Boolean)[0] || "";
+  return MACOS_PROTECTED_DIR_NAMES.has(topLevelDir);
+}
+
+function createProjectRootAccessError(projectRoot, error) {
+  const normalizedProjectRoot = normalizeWorkspaceInput(projectRoot) || String(projectRoot || "").trim();
+  const accessDenied = isPermissionDeniedError(error);
+  const notFound = error?.code === "ENOENT";
+
+  let message = normalizedProjectRoot
+    ? `无法读取项目目录：${normalizedProjectRoot}`
+    : "无法读取当前项目目录";
+
+  if (notFound) {
+    message = normalizedProjectRoot
+      ? `未找到项目目录：${normalizedProjectRoot}`
+      : "未找到当前项目目录";
+  } else if (accessDenied) {
+    message += "。";
+    if (isLikelyMacosProtectedDirectory(normalizedProjectRoot)) {
+      message += "后台服务可能没有 macOS 对该目录的访问权限。请给启动服务的 Node 或宿主应用授予“完全磁盘访问权限”，或将项目移出 Documents/Desktop/Downloads。";
+    } else {
+      message += "后台服务没有该目录的读取权限。请检查目录权限或启动服务的宿主权限。";
+    }
+  } else if (error?.message) {
+    message += `：${error.message}`;
+  }
+
+  const wrappedError = new Error(message);
+  wrappedError.code = notFound
+    ? "PROJECT_ROOT_NOT_FOUND"
+    : accessDenied
+      ? "PROJECT_ROOT_ACCESS_DENIED"
+      : "PROJECT_ROOT_UNREADABLE";
+  wrappedError.statusCode = notFound ? 404 : accessDenied ? 403 : 500;
+  wrappedError.cause = error;
+  return wrappedError;
+}
+
+async function ensureProjectRootReadable(projectRoot) {
+  const normalizedProjectRoot = normalizeWorkspaceInput(projectRoot);
+  if (!normalizedProjectRoot) {
+    throw createProjectRootAccessError(projectRoot, Object.assign(new Error("项目目录无效"), { code: "ENOENT" }));
+  }
+
+  let stat;
+  try {
+    stat = await fs.stat(normalizedProjectRoot);
+  } catch (error) {
+    throw createProjectRootAccessError(normalizedProjectRoot, error);
+  }
+
+  if (!stat?.isDirectory()) {
+    throw createProjectRootAccessError(
+      normalizedProjectRoot,
+      Object.assign(new Error("项目目录不是文件夹"), { code: "ENOENT" }),
+    );
+  }
+
+  try {
+    await fs.access(normalizedProjectRoot, FS_CONSTANTS.R_OK | FS_CONSTANTS.X_OK);
+    await fs.readdir(normalizedProjectRoot, { withFileTypes: true });
+  } catch (error) {
+    throw createProjectRootAccessError(normalizedProjectRoot, error);
+  }
+
+  return normalizedProjectRoot;
+}
+
+async function inferProjectRootFromPath(candidatePath) {
+  const normalizedCandidatePath = normalizeWorkspaceInput(candidatePath);
+  if (!normalizedCandidatePath) {
+    return "";
+  }
+
+  const stat = await fs.stat(normalizedCandidatePath).catch(() => null);
+  let currentDir = stat?.isDirectory()
+    ? normalizedCandidatePath
+    : path.dirname(normalizedCandidatePath);
+  const homeDir = normalizeWorkspaceInput(os.homedir());
+  const gitRoot = await execFileAsync("git", ["-C", currentDir, "rev-parse", "--show-toplevel"], {
+    cwd: currentDir,
+  })
+    .then(({ stdout }) => normalizeWorkspaceInput(stdout))
+    .catch(() => "");
+  if (gitRoot) {
+    return gitRoot;
+  }
+
+  const discoveredStrongWorkspaceRoots = [];
+  const discoveredWeakWorkspaceRoots = [];
+  const discoveredProjectRoots = [];
+
+  for (let depth = 0; depth < PROJECT_ROOT_DISCOVERY_LIMIT && currentDir; depth += 1) {
+    let matchedStrongWorkspaceRoot = false;
+    let matchedWeakWorkspaceRoot = false;
+    let matchedProjectRoot = false;
+
+    for (const marker of PROJECT_ROOT_STRONG_WORKSPACE_MARKERS) {
+      const markerPath = path.join(currentDir, marker);
+      const markerStat = await fs.stat(markerPath).catch(() => null);
+      if (markerStat) {
+        matchedStrongWorkspaceRoot = true;
+        matchedProjectRoot = true;
+        break;
+      }
+    }
+
+    if (!matchedStrongWorkspaceRoot && currentDir !== homeDir) {
+      for (const marker of PROJECT_ROOT_WEAK_WORKSPACE_MARKERS) {
+        const markerPath = path.join(currentDir, marker);
+        const markerStat = await fs.stat(markerPath).catch(() => null);
+        if (markerStat) {
+          matchedWeakWorkspaceRoot = true;
+          break;
+        }
+      }
+    }
+
+    if (!matchedStrongWorkspaceRoot) {
+      for (const marker of PROJECT_ROOT_PROJECT_MARKERS) {
+        const markerPath = path.join(currentDir, marker);
+        const markerStat = await fs.stat(markerPath).catch(() => null);
+        if (markerStat) {
+          matchedProjectRoot = true;
+          break;
+        }
+      }
+    }
+
+    if (matchedStrongWorkspaceRoot) {
+      discoveredStrongWorkspaceRoots.push(currentDir);
+    }
+    if (matchedWeakWorkspaceRoot) {
+      discoveredWeakWorkspaceRoots.push(currentDir);
+    }
+    if (matchedProjectRoot) {
+      discoveredProjectRoots.push(currentDir);
+    }
+
+    const parentDir = path.dirname(currentDir);
+    if (!parentDir || parentDir === currentDir) {
+      break;
+    }
+    currentDir = parentDir;
+  }
+
+  if (discoveredStrongWorkspaceRoots.length > 0) {
+    return discoveredStrongWorkspaceRoots[discoveredStrongWorkspaceRoots.length - 1];
+  }
+  if (discoveredWeakWorkspaceRoots.length > 0) {
+    return discoveredWeakWorkspaceRoots[discoveredWeakWorkspaceRoots.length - 1];
+  }
+  if (discoveredProjectRoots.length > 0) {
+    return discoveredProjectRoots[discoveredProjectRoots.length - 1];
+  }
+
+  return stat?.isDirectory()
+    ? normalizedCandidatePath
+    : path.dirname(normalizedCandidatePath);
+}
+
+async function resolveProjectRootFromHints({ workspaceRoot, workspaceFile } = {}) {
+  const normalizedWorkspaceRoot = normalizeWorkspaceInput(workspaceRoot);
+  if (normalizedWorkspaceRoot) {
+    const rootStat = await fs.stat(normalizedWorkspaceRoot).catch(() => null);
+    if (rootStat?.isDirectory()) {
+      return normalizedWorkspaceRoot;
+    }
+
+    const inferredFromRoot = await inferProjectRootFromPath(normalizedWorkspaceRoot);
+    const inferredRootStat = inferredFromRoot
+      ? await fs.stat(inferredFromRoot).catch(() => null)
+      : null;
+    if (inferredRootStat?.isDirectory()) {
+      return inferredFromRoot;
+    }
+  }
+
+  const normalizedWorkspaceFile = normalizeWorkspaceInput(workspaceFile);
+  if (normalizedWorkspaceFile) {
+    const inferredFromFile = await inferProjectRootFromPath(normalizedWorkspaceFile);
+    const inferredFileStat = inferredFromFile
+      ? await fs.stat(inferredFromFile).catch(() => null)
+      : null;
+    if (inferredFileStat?.isDirectory()) {
+      return inferredFromFile;
+    }
+  }
+
+  return "";
+}
+
+export async function resolveProjectRoot({
+  workspaceRoot,
+  workspaceFile,
+  fallbackRoot = WORKSPACE_ROOT,
+} = {}) {
+  const resolvedRoot = await resolveProjectRootFromHints({ workspaceRoot, workspaceFile });
+  if (resolvedRoot) {
+    return resolvedRoot;
+  }
+
+  return normalizeWorkspaceInput(fallbackRoot) || "";
+}
+
+function getProjectCacheKey(projectRoot) {
+  return normalizeWorkspaceInput(projectRoot) || WORKSPACE_ROOT;
+}
+
+function normalizeProjectPath(relPath, workspaceRoot = WORKSPACE_ROOT) {
   let normalized = String(relPath || "")
     .replaceAll("\\", "/")
     .trim();
@@ -82,15 +366,15 @@ function normalizeProjectPath(relPath) {
     normalized = normalized.slice(runtimeMarkerIndex + RUNTIME_WORKSPACE_MARKER.length);
   }
 
-  const workspaceRoot = String(WORKSPACE_ROOT || "")
+  const normalizedWorkspaceRoot = String(workspaceRoot || "")
     .replaceAll("\\", "/")
     .replace(/\/+$/, "");
   const normalizedLower = normalized.toLowerCase();
-  const workspaceLower = workspaceRoot.toLowerCase();
+  const workspaceLower = normalizedWorkspaceRoot.toLowerCase();
 
-  if (workspaceRoot && normalizedLower.startsWith(`${workspaceLower}/`)) {
-    normalized = normalized.slice(workspaceRoot.length + 1);
-  } else if (workspaceRoot && normalizedLower === workspaceLower) {
+  if (normalizedWorkspaceRoot && normalizedLower.startsWith(`${workspaceLower}/`)) {
+    normalized = normalized.slice(normalizedWorkspaceRoot.length + 1);
+  } else if (normalizedWorkspaceRoot && normalizedLower === workspaceLower) {
     normalized = "";
   }
 
@@ -100,8 +384,8 @@ function normalizeProjectPath(relPath) {
     .trim();
 }
 
-function shouldSkipRelativePath(relPath) {
-  const normalizedPath = normalizeProjectPath(relPath);
+function shouldSkipRelativePath(relPath, workspaceRoot = WORKSPACE_ROOT) {
+  const normalizedPath = normalizeProjectPath(relPath, workspaceRoot);
   const segments = normalizedPath.split("/").filter(Boolean);
   const baseName = path.posix.basename(normalizedPath);
   if (SKIP_BASENAMES.has(baseName)) return true;
@@ -109,8 +393,8 @@ function shouldSkipRelativePath(relPath) {
   return segments.some((segment) => SKIP_DIRS.has(segment));
 }
 
-function getProjectFileBasename(relPath) {
-  return path.posix.basename(normalizeProjectPath(relPath));
+function getProjectFileBasename(relPath, workspaceRoot = WORKSPACE_ROOT) {
+  return path.posix.basename(normalizeProjectPath(relPath, workspaceRoot));
 }
 
 function toCompactSearchKey(value) {
@@ -119,9 +403,9 @@ function toCompactSearchKey(value) {
     .replace(/[^a-z0-9]+/g, "");
 }
 
-function buildProjectFileEntry(relPath) {
-  const normalizedPath = normalizeProjectPath(relPath);
-  const name = getProjectFileBasename(normalizedPath);
+function buildProjectFileEntry(relPath, workspaceRoot = WORKSPACE_ROOT) {
+  const normalizedPath = normalizeProjectPath(relPath, workspaceRoot);
+  const name = getProjectFileBasename(normalizedPath, workspaceRoot);
   const ext = path.posix.extname(name);
   const stem = ext ? name.slice(0, -ext.length) : name;
   return {
@@ -137,9 +421,9 @@ function buildProjectFileEntry(relPath) {
   };
 }
 
-function getProjectFileExtension(relPath) {
-  const normalized = normalizeProjectPath(relPath);
-  const baseName = getProjectFileBasename(normalized).toLowerCase();
+function getProjectFileExtension(relPath, workspaceRoot = WORKSPACE_ROOT) {
+  const normalized = normalizeProjectPath(relPath, workspaceRoot);
+  const baseName = getProjectFileBasename(normalized, workspaceRoot).toLowerCase();
   if (TEXT_FILE_BASENAMES.has(baseName)) {
     return baseName.replace(/^\./, "");
   }
@@ -178,10 +462,13 @@ async function listProjectFilesWithRipgrep(projectRoot) {
 
     return stdout
       .split("\n")
-      .map((line) => normalizeProjectPath(line))
+      .map((line) => normalizeProjectPath(line, projectRoot))
       .filter(Boolean)
-      .filter((relPath) => !shouldSkipRelativePath(relPath));
-  } catch {
+      .filter((relPath) => !shouldSkipRelativePath(relPath, projectRoot));
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      throw createProjectRootAccessError(projectRoot, error);
+    }
     return null;
   }
 }
@@ -193,13 +480,16 @@ async function listProjectFilesWithNodeFs(projectRoot) {
     let entries;
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
+    } catch (error) {
+      if (!prefix && isPermissionDeniedError(error)) {
+        throw createProjectRootAccessError(projectRoot, error);
+      }
       return;
     }
 
     for (const entry of entries) {
       const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (shouldSkipRelativePath(relPath)) continue;
+      if (shouldSkipRelativePath(relPath, projectRoot)) continue;
 
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
@@ -208,7 +498,7 @@ async function listProjectFilesWithNodeFs(projectRoot) {
       }
       if (!entry.isFile()) continue;
 
-      files.push(normalizeProjectPath(relPath));
+      files.push(normalizeProjectPath(relPath, projectRoot));
     }
   }
 
@@ -217,27 +507,30 @@ async function listProjectFilesWithNodeFs(projectRoot) {
 }
 
 async function getProjectFileIndex(projectRoot) {
-  if (projectFileCache.expiresAt > Date.now() && Array.isArray(projectFileCache.entries) && projectFileCache.entries.length > 0) {
-    return projectFileCache.entries;
+  const cacheKey = getProjectCacheKey(projectRoot);
+  const cachedIndex = projectFileCache.get(cacheKey);
+  if (cachedIndex?.expiresAt > Date.now() && Array.isArray(cachedIndex.entries) && cachedIndex.entries.length > 0) {
+    return cachedIndex.entries;
   }
 
+  const readableProjectRoot = await ensureProjectRootReadable(projectRoot);
   const files = await listProjectFilesWithRipgrep(projectRoot) || await listProjectFilesWithNodeFs(projectRoot);
   const entries = [...new Set(files || [])]
     .sort((a, b) => {
       const lengthDiff = a.length - b.length;
       return lengthDiff !== 0 ? lengthDiff : a.localeCompare(b);
     })
-    .map((relPath) => buildProjectFileEntry(relPath));
+    .map((relPath) => buildProjectFileEntry(relPath, readableProjectRoot));
 
-  projectFileCache = {
+  projectFileCache.set(cacheKey, {
     expiresAt: Date.now() + PROJECT_FILE_CACHE_TTL_MS,
     entries,
-  };
-  projectFileSearchCache = {
+  });
+  projectFileSearchCache.set(cacheKey, {
     expiresAt: 0,
     query: "",
     entries: [],
-  };
+  });
 
   return entries;
 }
@@ -515,36 +808,38 @@ function scoreProjectFile(entry, rawQuery) {
   return getFuzzyProjectFileScore(entry, normalizedQuery);
 }
 
-function getSearchSourceEntries(entries, normalizedQuery) {
+function getSearchSourceEntries(entries, normalizedQuery, projectRoot) {
   if (!normalizedQuery) {
     return entries;
   }
 
+  const cacheKey = getProjectCacheKey(projectRoot);
+  const cachedSearch = projectFileSearchCache.get(cacheKey);
   if (
-    projectFileSearchCache.expiresAt > Date.now()
-    && projectFileSearchCache.query
-    && normalizedQuery.startsWith(projectFileSearchCache.query)
-    && Array.isArray(projectFileSearchCache.entries)
-    && projectFileSearchCache.entries.length > 0
+    cachedSearch?.expiresAt > Date.now()
+    && cachedSearch.query
+    && normalizedQuery.startsWith(cachedSearch.query)
+    && Array.isArray(cachedSearch.entries)
+    && cachedSearch.entries.length > 0
   ) {
-    return projectFileSearchCache.entries;
+    return cachedSearch.entries;
   }
 
   return entries;
 }
 
-export async function searchProjectFiles(query, limit = PROJECT_FILE_SEARCH_LIMIT) {
-  const projectRoot = WORKSPACE_ROOT;
+export async function searchProjectFiles(query, limit = PROJECT_FILE_SEARCH_LIMIT, options = {}) {
+  const projectRoot = await resolveProjectRoot(options);
   const entries = await getProjectFileIndex(projectRoot);
-  const normalizedQuery = normalizeProjectPath(query).toLowerCase();
-  const sourceEntries = getSearchSourceEntries(entries, normalizedQuery);
+  const normalizedQuery = normalizeProjectPath(query, projectRoot).toLowerCase();
+  const sourceEntries = getSearchSourceEntries(entries, normalizedQuery, projectRoot);
   const matchedEntries = sourceEntries.filter((entry) => scoreProjectFile(entry, normalizedQuery) >= 0);
 
-  projectFileSearchCache = {
+  projectFileSearchCache.set(getProjectCacheKey(projectRoot), {
     expiresAt: Date.now() + PROJECT_FILE_QUERY_CACHE_TTL_MS,
     query: normalizedQuery,
     entries: matchedEntries,
-  };
+  });
 
   return matchedEntries
     .map((entry) => ({
@@ -569,9 +864,9 @@ function isProbablyTextBuffer(buffer) {
   return sample.length === 0 || suspiciousBytes / sample.length < 0.1;
 }
 
-export async function readProjectFile(filePath) {
-  const projectRoot = WORKSPACE_ROOT;
-  const normalizedPath = normalizeProjectPath(filePath);
+async function resolveProjectFileTarget(filePath, options = {}) {
+  const projectRoot = await resolveProjectRoot(options);
+  const normalizedPath = normalizeProjectPath(filePath, projectRoot);
   if (!normalizedPath) {
     throw new Error("文件路径不能为空");
   }
@@ -585,6 +880,21 @@ export async function readProjectFile(filePath) {
   if (!stat?.isFile()) {
     throw new Error("未找到文件");
   }
+
+  return {
+    projectRoot,
+    normalizedPath,
+    fullPath,
+    stat,
+  };
+}
+
+export async function readProjectFile(filePath, options = {}) {
+  const {
+    normalizedPath,
+    fullPath,
+    stat,
+  } = await resolveProjectFileTarget(filePath, options);
 
   if (stat.size > PROJECT_IMAGE_FILE_MAX_BYTES) {
     throw new Error("文件太大，超过 5MB");
@@ -629,22 +939,11 @@ export async function readProjectFile(filePath) {
   };
 }
 
-export async function openProjectFile(filePath) {
-  const projectRoot = WORKSPACE_ROOT;
-  const normalizedPath = normalizeProjectPath(filePath);
-  if (!normalizedPath) {
-    throw new Error("文件路径不能为空");
-  }
-
-  const fullPath = path.resolve(projectRoot, normalizedPath);
-  if (!isPathInsideProject(projectRoot, fullPath)) {
-    throw new Error("只能打开当前项目内的文件");
-  }
-
-  const stat = await fs.stat(fullPath).catch(() => null);
-  if (!stat?.isFile()) {
-    throw new Error("未找到文件");
-  }
+export async function openProjectFile(filePath, options = {}) {
+  const {
+    normalizedPath,
+    fullPath,
+  } = await resolveProjectFileTarget(filePath, options);
 
   try {
     await execFileAsync("/usr/bin/open", ["-a", "Cursor", fullPath]);
@@ -746,8 +1045,8 @@ async function locateWithNodeFs(projectRoot, needle, pastedLines) {
   return walk(projectRoot);
 }
 
-async function locateCodeInProject(codeText) {
-  const projectRoot = WORKSPACE_ROOT;
+async function locateCodeInProject(codeText, options = {}) {
+  const projectRoot = await resolveProjectRoot(options);
   const lines = codeText.split("\n");
   const firstNonEmpty = lines.find((l) => l.trim());
   if (!firstNonEmpty) return { found: false };
@@ -849,17 +1148,18 @@ function buildChatAppHtml(bundle, resourceUri = "") {
   <script>window.__XIAOHAHA_APP_RESOURCE_URI = ${JSON.stringify(resourceUri)};</script>
   <script>window.__XIAOHAHA_WORKSPACE_ROOT = ${JSON.stringify(WORKSPACE_ROOT)};</script>
   <script>${escapeInlineScript(bundle)}</script>
-${DEV_MODE ? `  <script>
+  <script>
     (function(){
       var mtime = null;
+      var intervalMs = ${DEV_MODE ? 1500 : 5000};
       setInterval(function(){
         fetch("${BASE_URL}dev/bundle-mtime").then(function(r){ return r.json(); }).then(function(d){
           if(mtime === null){ mtime = d.mtime; return; }
           if(d.mtime !== mtime){ location.reload(); }
         }).catch(function(){});
-      }, 1500);
+      }, intervalMs);
     })();
-  </script>` : ""}
+  </script>
 </body>
 </html>`;
 }
@@ -992,6 +1292,30 @@ function normalizePromptEntry(entry) {
   };
 }
 
+function extractWorkspaceOptions(input = {}) {
+  if (!input || typeof input !== "object") {
+    return {
+      workspaceRoot: "",
+      workspaceFile: "",
+    };
+  }
+
+  return {
+    workspaceRoot:
+      typeof input.workspace_root === "string"
+        ? input.workspace_root
+        : typeof input.workspaceRoot === "string"
+          ? input.workspaceRoot
+          : "",
+    workspaceFile:
+      typeof input.workspace_file === "string"
+        ? input.workspace_file
+        : typeof input.workspaceFile === "string"
+          ? input.workspaceFile
+          : "",
+  };
+}
+
 function extractImagePayloadFromDataUrl(dataUrl) {
   const match = String(dataUrl || "").match(/^data:([^;]+);base64,([\s\S]+)$/);
   if (!match) {
@@ -1023,13 +1347,13 @@ function formatTextAttachmentForPrompt(attachment) {
   return `📎 ${ref}:\n\`\`\`${ext}\n${attachment.text}\n\`\`\``;
 }
 
-async function resolveAttachmentForPrompt(attachment, attachmentStore) {
+async function resolveAttachmentForPrompt(attachment, attachmentStore, workspaceOptions = {}) {
   if (!attachment || typeof attachment !== "object") {
     return null;
   }
 
   if (attachment.store === "project" && attachment.path) {
-    const projectFile = await readProjectFile(attachment.path).catch(() => null);
+    const projectFile = await readProjectFile(attachment.path, workspaceOptions).catch(() => null);
     if (!projectFile?.ok) {
       return null;
     }
@@ -1083,7 +1407,7 @@ async function resolveAttachmentForPrompt(attachment, attachmentStore) {
   return null;
 }
 
-async function buildCheckMessagesPrompt(entry, conversationId, contextSummary, attachmentStore) {
+async function buildCheckMessagesPrompt(entry, conversationId, contextSummary, attachmentStore, workspaceOptions = {}) {
   const normalized = normalizePromptEntry(entry);
   const images = [];
   let match;
@@ -1094,7 +1418,7 @@ async function buildCheckMessagesPrompt(entry, conversationId, contextSummary, a
 
   const cleanText = normalized.message.replace(IMAGE_MARKER_RE, "").trim();
   const resolvedAttachments = await Promise.all(
-    normalized.attachments.map((attachment) => resolveAttachmentForPrompt(attachment, attachmentStore))
+    normalized.attachments.map((attachment) => resolveAttachmentForPrompt(attachment, attachmentStore, workspaceOptions))
   );
   const textAttachmentBlocks = [];
 
@@ -1240,11 +1564,23 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
           .string()
           .optional()
           .describe("Stable logical conversation id. Reuse the same value on every follow-up check_messages call in the same chat thread."),
+        workspace_root: z
+          .string()
+          .optional()
+          .describe("Absolute current project root for file mentions and project-relative attachments."),
+        workspace_file: z
+          .string()
+          .optional()
+          .describe("Absolute current file path used to infer the active project root when workspace_root is unavailable."),
       },
       _meta: buildCheckMessagesToolMeta(CHAT_APP_URI),
     },
-    async ({ ai_response, conversation_id }, extra) => {
+    async ({ ai_response, conversation_id, workspace_root, workspace_file }, extra) => {
       const activeAppResourceUri = CHAT_APP_URI;
+      const workspaceOptions = extractWorkspaceOptions({
+        workspace_root,
+        workspace_file,
+      });
 
       const session = sessionService.resolveSession({
         conversationId: conversation_id,
@@ -1261,6 +1597,13 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
       sessionService.bindToolInstanceToConversation(instanceId, session.conversationId);
       // 每次新的 check_messages 卡片出现时，都把它标成当前活动视图，避免旧卡片继续展示输入框。
       sessionService.bindAppInstanceToSession(session, instanceId);
+      const resolvedWorkspaceRoot = await resolveProjectRoot({
+        ...workspaceOptions,
+        fallbackRoot: "",
+      }).catch(() => "");
+      if (resolvedWorkspaceRoot) {
+        sessionService.rememberWorkspaceRoot(session, resolvedWorkspaceRoot);
+      }
 
       recordIntegrationDiagnostic(diagnostics, "check_messages_called", {
         mcpSessionId: extra.sessionId || "",
@@ -1285,7 +1628,13 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
           preview: queuedPreview,
           attachmentCount: Array.isArray(queuedMessage.attachments) ? queuedMessage.attachments.length : 0,
         });
-        return await buildCheckMessagesPrompt(queuedMessage, session.conversationId, session.contextSummary, attachmentStore);
+        return await buildCheckMessagesPrompt(
+          queuedMessage,
+          session.conversationId,
+          session.contextSummary,
+          attachmentStore,
+          { workspaceRoot: session.workspaceRoot },
+        );
       }
 
       let abortListener = null;
@@ -1337,6 +1686,7 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
               error: "Cursor cancelled check_messages while waiting for the next message.",
               state: {
                 conversationId: session.conversationId,
+                workspaceRoot: session.workspaceRoot || "",
                 anyWaiting: false,
                 waiting: false,
                 isCurrentView: false,
@@ -1364,6 +1714,7 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
               error: "Cursor MCP session closed while waiting for the next message.",
               state: {
                 conversationId: session.conversationId,
+                workspaceRoot: session.workspaceRoot || "",
                 anyWaiting: false,
                 waiting: false,
                 isCurrentView: false,
@@ -1380,7 +1731,13 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
           preview: message.preview || "",
           attachmentCount: Array.isArray(message.attachments) ? message.attachments.length : 0,
         });
-        return await buildCheckMessagesPrompt(message, session.conversationId, session.contextSummary, attachmentStore);
+        return await buildCheckMessagesPrompt(
+          message,
+          session.conversationId,
+          session.contextSummary,
+          attachmentStore,
+          { workspaceRoot: session.workspaceRoot },
+        );
       } finally {
         stopProgress();
         if (abortListener) {
@@ -1416,6 +1773,14 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
           .boolean()
           .optional()
           .describe("When true, attempt to bind the querying iframe as the current app view."),
+        workspace_root: z
+          .string()
+          .optional()
+          .describe("Absolute current project root for project-relative file actions."),
+        workspace_file: z
+          .string()
+          .optional()
+          .describe("Absolute current file path used to infer the active project root."),
       },
       _meta: {
         ui: {
@@ -1423,7 +1788,7 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         },
       },
     },
-    async ({ instance_id, conversation_id, route_hint, resource_uri, bind_instance }, extra) => {
+    async ({ instance_id, conversation_id, route_hint, resource_uri, bind_instance, workspace_root, workspace_file }, extra) => {
       const state = sessionService.getChatState({
         conversationId: conversation_id,
         instanceId: instance_id,
@@ -1432,6 +1797,26 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         allowClientSessionFallback: false,
         bindInstance: Boolean(bind_instance),
       });
+      const session = sessionService.resolveSession({
+        conversationId: conversation_id,
+        instanceId: instance_id,
+        aiResponseHint: route_hint,
+        allowClientSessionFallback: false,
+      });
+      const workspaceOptions = extractWorkspaceOptions({
+        workspace_root,
+        workspace_file,
+      });
+      if (session) {
+        const resolvedWorkspaceRoot = await resolveProjectRoot({
+          ...workspaceOptions,
+          fallbackRoot: "",
+        }).catch(() => "");
+        if (resolvedWorkspaceRoot) {
+          sessionService.rememberWorkspaceRoot(session, resolvedWorkspaceRoot);
+          state.workspaceRoot = session.workspaceRoot || state.workspaceRoot || "";
+        }
+      }
 
       recordIntegrationDiagnostic(diagnostics, "app_state_tool_query", {
         instanceId: instance_id || "",
@@ -1485,6 +1870,14 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
           .string()
           .optional()
           .describe("Last displayed AI response text, used as a first-round routing hint before conversation_id is available."),
+        workspace_root: z
+          .string()
+          .optional()
+          .describe("Absolute current project root for file mentions and project-relative attachments."),
+        workspace_file: z
+          .string()
+          .optional()
+          .describe("Absolute current file path used to infer the active project root when workspace_root is unavailable."),
       },
       _meta: {
         ui: {
@@ -1492,7 +1885,7 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         },
       },
     },
-    async ({ message, preview_message, attachments = [], instance_id, conversation_id, route_hint }, extra) => {
+    async ({ message, preview_message, attachments = [], instance_id, conversation_id, route_hint, workspace_root, workspace_file }, extra) => {
       const session = sessionService.resolveSession({
         conversationId: conversation_id,
         instanceId: instance_id,
@@ -1538,6 +1931,17 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         };
       }
 
+      const workspaceOptions = extractWorkspaceOptions({
+        workspace_root,
+        workspace_file,
+      });
+      const resolvedWorkspaceRoot = await resolveProjectRoot({
+        ...workspaceOptions,
+        fallbackRoot: "",
+      }).catch(() => "");
+      if (resolvedWorkspaceRoot) {
+        sessionService.rememberWorkspaceRoot(session, resolvedWorkspaceRoot);
+      }
       sessionService.bindAppInstanceToSession(session, instance_id);
       const previewMessage = typeof preview_message === "string" && preview_message.trim()
         ? preview_message.trim()
@@ -1740,6 +2144,14 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
           .max(20)
           .optional()
           .describe("Maximum number of file candidates to return."),
+        workspace_root: z
+          .string()
+          .optional()
+          .describe("Absolute current project root for this mention search."),
+        workspace_file: z
+          .string()
+          .optional()
+          .describe("Absolute current file path used to infer the active project root."),
       },
       _meta: {
         ui: {
@@ -1747,8 +2159,15 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         },
       },
     },
-    async ({ query, limit }) => {
-      const items = await searchProjectFiles(query || "", limit || PROJECT_FILE_SEARCH_LIMIT);
+    async ({ query, limit, workspace_root, workspace_file }) => {
+      const items = await searchProjectFiles(
+        query || "",
+        limit || PROJECT_FILE_SEARCH_LIMIT,
+        extractWorkspaceOptions({
+          workspace_root,
+          workspace_file,
+        }),
+      );
       return {
         content: [{ type: "text", text: JSON.stringify({ items }) }],
         structuredContent: { items },
@@ -1763,6 +2182,14 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
       description: "Read a selected project file for the embedded Xiaohaha chat mention picker.",
       inputSchema: {
         file_path: z.string().describe("Project-relative file path selected from the mention picker."),
+        workspace_root: z
+          .string()
+          .optional()
+          .describe("Absolute current project root for this file read."),
+        workspace_file: z
+          .string()
+          .optional()
+          .describe("Absolute current file path used to infer the active project root."),
       },
       _meta: {
         ui: {
@@ -1770,9 +2197,15 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         },
       },
     },
-    async ({ file_path }) => {
+    async ({ file_path, workspace_root, workspace_file }) => {
       try {
-        const file = await readProjectFile(file_path);
+        const file = await readProjectFile(
+          file_path,
+          extractWorkspaceOptions({
+            workspace_root,
+            workspace_file,
+          }),
+        );
         return {
           content: [{ type: "text", text: JSON.stringify(file) }],
           structuredContent: file,
@@ -1795,6 +2228,14 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
       description: "Open a selected project file in the editor for the embedded Xiaohaha chat mention chip.",
       inputSchema: {
         file_path: z.string().describe("Project-relative file path selected from the inline mention chip."),
+        workspace_root: z
+          .string()
+          .optional()
+          .describe("Absolute current project root for this file open request."),
+        workspace_file: z
+          .string()
+          .optional()
+          .describe("Absolute current file path used to infer the active project root."),
       },
       _meta: {
         ui: {
@@ -1802,9 +2243,15 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         },
       },
     },
-    async ({ file_path }) => {
+    async ({ file_path, workspace_root, workspace_file }) => {
       try {
-        const result = await openProjectFile(file_path);
+        const result = await openProjectFile(
+          file_path,
+          extractWorkspaceOptions({
+            workspace_root,
+            workspace_file,
+          }),
+        );
         return {
           content: [{ type: "text", text: JSON.stringify(result) }],
           structuredContent: result,
@@ -1827,6 +2274,14 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
       description: "Locate a code snippet in the project files. Returns the file path and line range.",
       inputSchema: {
         code_text: z.string().describe("The code text to locate."),
+        workspace_root: z
+          .string()
+          .optional()
+          .describe("Absolute current project root for this locate operation."),
+        workspace_file: z
+          .string()
+          .optional()
+          .describe("Absolute current file path used to infer the active project root."),
       },
       _meta: {
         ui: {
@@ -1834,8 +2289,14 @@ export function registerChatAppIntegration(mcpServer, sessionService, attachment
         },
       },
     },
-    async ({ code_text }) => {
-      const result = await locateCodeInProject(code_text);
+    async ({ code_text, workspace_root, workspace_file }) => {
+      const result = await locateCodeInProject(
+        code_text,
+        extractWorkspaceOptions({
+          workspace_root,
+          workspace_file,
+        }),
+      );
       return {
         content: [{ type: "text", text: JSON.stringify(result) }],
         structuredContent: result,

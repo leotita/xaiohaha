@@ -162,6 +162,8 @@ const uiState = {
   pendingView: false,
   instanceId: "",
   conversationId: "",
+  workspaceRoot: "",
+  workspaceFile: "",
   routeHint: "",
   anyWaiting: false,
   waiting: false,
@@ -190,6 +192,179 @@ let historicalViewFrozen = false;
 let bootstrapRefreshTimer = null;
 let bootstrapRefreshAttempts = 0;
 let lastRenderedPreviewText = "";
+
+const HOST_WORKSPACE_ROOT_PATHS = [
+  ["workspaceRoot"],
+  ["workspace_root"],
+  ["projectRoot"],
+  ["project_root"],
+  ["cwd"],
+  ["workingDirectory"],
+  ["working_directory"],
+  ["workspace", "root"],
+  ["workspace", "path"],
+  ["workspace", "uri"],
+  ["project", "root"],
+  ["project", "path"],
+  ["editor", "workspaceRoot"],
+  ["editor", "workspace", "root"],
+  ["activeWorkspace", "path"],
+  ["activeWorkspace", "rootPath"],
+];
+const HOST_WORKSPACE_FILE_PATHS = [
+  ["currentFile"],
+  ["current_file"],
+  ["activeFile"],
+  ["active_file"],
+  ["filePath"],
+  ["file_path"],
+  ["documentPath"],
+  ["document_path"],
+  ["editor", "document", "path"],
+  ["editor", "document", "uri"],
+  ["editor", "activeFile", "path"],
+  ["editor", "activeFile", "uri"],
+  ["activeDocument", "path"],
+  ["activeDocument", "uri"],
+  ["document", "path"],
+  ["document", "uri"],
+  ["selection", "filePath"],
+  ["selection", "file_path"],
+  ["resource", "path"],
+  ["resource", "uri"],
+];
+
+function normalizeWorkspaceHint(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized) {
+    return "";
+  }
+
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(normalized) && !normalized.startsWith("file://")) {
+    return "";
+  }
+
+  const looksAbsolutePath = normalized.startsWith("/")
+    || normalized.startsWith("\\\\")
+    || /^[A-Za-z]:[\\/]/.test(normalized)
+    || normalized.startsWith("file://");
+
+  return looksAbsolutePath ? normalized : "";
+}
+
+function readNestedString(source, pathSegments = []) {
+  let current = source;
+  for (const segment of pathSegments) {
+    if (!current || typeof current !== "object" || !(segment in current)) {
+      return "";
+    }
+    current = current[segment];
+  }
+  return typeof current === "string" ? current.trim() : "";
+}
+
+function pickNestedString(source, candidatePaths = []) {
+  for (const pathSegments of candidatePaths) {
+    const value = readNestedString(source, pathSegments);
+    if (value) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function extractWorkspaceRootFromArgs(args) {
+  if (!args || typeof args !== "object") {
+    return "";
+  }
+
+  return normalizeWorkspaceHint(
+    typeof args.workspace_root === "string"
+      ? args.workspace_root
+      : typeof args.workspaceRoot === "string"
+        ? args.workspaceRoot
+        : typeof args.project_root === "string"
+          ? args.project_root
+          : typeof args.projectRoot === "string"
+            ? args.projectRoot
+            : typeof args.cwd === "string"
+              ? args.cwd
+              : typeof args.working_directory === "string"
+                ? args.working_directory
+                : typeof args.workingDirectory === "string"
+                  ? args.workingDirectory
+                  : ""
+  );
+}
+
+function extractWorkspaceFileFromArgs(args) {
+  if (!args || typeof args !== "object") {
+    return "";
+  }
+
+  return normalizeWorkspaceHint(
+    typeof args.workspace_file === "string"
+      ? args.workspace_file
+      : typeof args.workspaceFile === "string"
+        ? args.workspaceFile
+        : typeof args.current_file === "string"
+          ? args.current_file
+          : typeof args.currentFile === "string"
+            ? args.currentFile
+            : typeof args.file_path === "string"
+              ? args.file_path
+              : typeof args.filePath === "string"
+                ? args.filePath
+                : typeof args.active_file === "string"
+                  ? args.active_file
+                  : typeof args.activeFile === "string"
+                    ? args.activeFile
+                    : ""
+  );
+}
+
+function extractWorkspaceHintsFromHostContext(hostContext) {
+  if (!hostContext || typeof hostContext !== "object") {
+    return { workspaceRoot: "", workspaceFile: "" };
+  }
+
+  return {
+    workspaceRoot: normalizeWorkspaceHint(pickNestedString(hostContext, HOST_WORKSPACE_ROOT_PATHS)),
+    workspaceFile: normalizeWorkspaceHint(pickNestedString(hostContext, HOST_WORKSPACE_FILE_PATHS)),
+  };
+}
+
+function applyWorkspaceHints({ workspaceRoot = "", workspaceFile = "" } = {}) {
+  const normalizedWorkspaceRoot = normalizeWorkspaceHint(workspaceRoot);
+  const normalizedWorkspaceFile = normalizeWorkspaceHint(workspaceFile);
+  let changed = false;
+
+  if (normalizedWorkspaceRoot && normalizedWorkspaceRoot !== uiState.workspaceRoot) {
+    uiState.workspaceRoot = normalizedWorkspaceRoot;
+    changed = true;
+  }
+
+  if (normalizedWorkspaceFile && normalizedWorkspaceFile !== uiState.workspaceFile) {
+    uiState.workspaceFile = normalizedWorkspaceFile;
+    changed = true;
+  }
+
+  return changed;
+}
+
+function buildWorkspaceHttpParams() {
+  return {
+    workspaceRoot: uiState.workspaceRoot || undefined,
+    workspaceFile: uiState.workspaceFile || undefined,
+  };
+}
+
+function buildWorkspaceToolArgs() {
+  return {
+    workspace_root: uiState.workspaceRoot || undefined,
+    workspace_file: uiState.workspaceFile || undefined,
+  };
+}
 
 function installRichInputBridge(editorEl) {
   let disabled = false;
@@ -755,19 +930,38 @@ async function searchProjectFilesForMention(mention) {
           params: {
             query: mention.query,
             limit: 20,
+            ...buildWorkspaceHttpParams(),
           },
         });
         items = Array.isArray(payload?.items) ? payload.items : [];
-      } catch {
+      } catch (localError) {
+        const localErrorMessage = localError instanceof Error ? localError.message : "";
+        const shouldFallback = !localErrorMessage
+          || localErrorMessage === "浏览器聊天地址不可用"
+          || localErrorMessage === "本地服务请求超时"
+          || localErrorMessage === "Failed to fetch";
+        if (!shouldFallback) {
+          throw localError;
+        }
+
         const result = await app.callServerTool({
           name: "xiaohaha_search_project_files",
           arguments: {
             query: mention.query,
             limit: 20,
+            ...buildWorkspaceToolArgs(),
           },
         }, {
           timeout: LOCAL_HTTP_TIMEOUT_MS,
         });
+        if (result?.isError) {
+          const toolErrorMessage = typeof result?.structuredContent?.error === "string" && result.structuredContent.error.trim()
+            ? result.structuredContent.error.trim()
+            : Array.isArray(result?.content)
+              ? result.content.find((item) => typeof item?.text === "string" && item.text.trim())?.text || ""
+              : "";
+          throw new Error(toolErrorMessage || "搜索项目文件失败");
+        }
         items = Array.isArray(result?.structuredContent?.items)
           ? result.structuredContent.items
           : [];
@@ -775,11 +969,13 @@ async function searchProjectFilesForMention(mention) {
 
       if (currentSeq !== mentionSearchSeq) return;
 
+      uiState.error = "";
       fileMentionPalette.showItems(items, mention.query);
     } catch (error) {
       if (currentSeq !== mentionSearchSeq) return;
-      fileMentionPalette.hide();
-      uiState.error = error instanceof Error ? error.message : "搜索项目文件失败";
+      const errorMessage = error instanceof Error ? error.message : "搜索项目文件失败";
+      fileMentionPalette.showError(errorMessage, mention.query);
+      uiState.error = errorMessage;
       render();
     }
   }, mention.query ? FILE_MENTION_SEARCH_DEBOUNCE_MS : 0);
@@ -853,6 +1049,7 @@ async function openProjectMention(mention) {
         timeoutMs: LOCAL_SEND_TIMEOUT_MS,
         body: {
           path: mention.path,
+          ...buildWorkspaceHttpParams(),
         },
       });
     } catch {
@@ -860,6 +1057,7 @@ async function openProjectMention(mention) {
         name: "xiaohaha_open_project_file",
         arguments: {
           file_path: mention.path,
+          ...buildWorkspaceToolArgs(),
         },
       }, {
         timeout: LOCAL_SEND_TIMEOUT_MS,
@@ -1147,11 +1345,18 @@ function syncHostContext(hostContext) {
   if (hostContext?.theme) applyDocumentTheme(hostContext.theme);
   if (hostContext?.styles?.variables) applyHostStyleVariables(hostContext.styles.variables);
   if (hostContext?.styles?.css?.fonts) applyHostFonts(hostContext.styles.css.fonts);
+  const hostWorkspaceHints = extractWorkspaceHintsFromHostContext(hostContext);
   const previousInstanceId = uiState.instanceId;
   if (hostContext?.toolInfo?.id !== undefined && hostContext?.toolInfo?.id !== null) {
     uiState.instanceId = String(hostContext.toolInfo.id);
   }
-  return previousInstanceId !== uiState.instanceId;
+  const instanceChanged = previousInstanceId !== uiState.instanceId;
+  if (instanceChanged) {
+    uiState.workspaceRoot = "";
+    uiState.workspaceFile = "";
+  }
+  applyWorkspaceHints(hostWorkspaceHints);
+  return instanceChanged;
 }
 
 /* ── State extraction (from MCP results) ── */
@@ -1167,6 +1372,13 @@ function normalizeState(state) {
 
   return {
     conversationId: typeof state?.conversationId === "string" ? state.conversationId : "",
+    workspaceRoot: normalizeWorkspaceHint(
+      typeof state?.workspaceRoot === "string"
+        ? state.workspaceRoot
+        : typeof state?.workspace_root === "string"
+          ? state.workspace_root
+          : ""
+    ),
     anyWaiting: Boolean(state?.anyWaiting),
     waiting: Boolean(state?.waiting),
     isCurrentView: Boolean(state?.isCurrentView),
@@ -1223,7 +1435,11 @@ function extractErrorMessage(result) {
 
 function extractConversationIdFromArgs(args) {
   if (!args || typeof args !== "object") return "";
-  return typeof args.conversation_id === "string" ? args.conversation_id : "";
+  return typeof args.conversation_id === "string"
+    ? args.conversation_id
+    : typeof args.conversationId === "string"
+      ? args.conversationId
+      : "";
 }
 
 function extractRouteHintFromArgs(args) {
@@ -1263,6 +1479,7 @@ async function refreshStateFromLocalHttp() {
       routeHint: uiState.routeHint || undefined,
       resourceUri: CURRENT_APP_RESOURCE_URI || undefined,
       bindInstance: shouldAttemptBindCurrentView() ? "1" : undefined,
+      ...buildWorkspaceHttpParams(),
     },
   });
   return normalizeState(payload?.state);
@@ -1277,6 +1494,7 @@ async function refreshStateFromServerTool() {
       route_hint: uiState.routeHint || undefined,
       resource_uri: CURRENT_APP_RESOURCE_URI || undefined,
       bind_instance: shouldAttemptBindCurrentView() || undefined,
+      ...buildWorkspaceToolArgs(),
     },
   }, {
     timeout: LOCAL_HTTP_TIMEOUT_MS,
@@ -1295,6 +1513,7 @@ async function sendAppMessageViaLocalHttp(message, previewMessage, attachmentsLi
       instanceId: uiState.instanceId || undefined,
       conversationId: uiState.conversationId || undefined,
       routeHint: uiState.routeHint || undefined,
+      ...buildWorkspaceHttpParams(),
     },
   });
   return normalizeState(payload?.state);
@@ -1310,6 +1529,7 @@ async function sendAppMessageViaServerTool(message, previewMessage, attachmentsL
       instance_id: uiState.instanceId || undefined,
       conversation_id: uiState.conversationId || undefined,
       route_hint: uiState.routeHint || undefined,
+      ...buildWorkspaceToolArgs(),
     },
   }, {
     timeout: LOCAL_SEND_TIMEOUT_MS,
@@ -1407,6 +1627,7 @@ async function refreshState() {
     && !uiState.completedTool
   );
   uiState.conversationId = nextState.conversationId || uiState.conversationId;
+  applyWorkspaceHints({ workspaceRoot: nextState.workspaceRoot });
   uiState.anyWaiting = nextState.anyWaiting;
   uiState.waiting = nextState.waiting && nextState.isCurrentView;
   uiState.isCurrentView = nextState.isCurrentView;
@@ -1562,6 +1783,7 @@ async function sendMessage() {
 
     if (nextState) {
       uiState.conversationId = nextState.conversationId || uiState.conversationId;
+      applyWorkspaceHints({ workspaceRoot: nextState.workspaceRoot });
       uiState.anyWaiting = nextState.anyWaiting;
       uiState.waiting = nextState.waiting && nextState.isCurrentView;
       uiState.isCurrentView = nextState.isCurrentView;
@@ -1903,7 +2125,10 @@ messageInput.addEventListener("paste", async (e) => {
       insertInlineSnippetAttachment(attId, pasteSelection);
       app.callServerTool({
         name: "xiaohaha_locate_code",
-        arguments: { code_text: rawText },
+        arguments: {
+          code_text: rawText,
+          ...buildWorkspaceToolArgs(),
+        },
       }).then((result) => {
         const loc = result?.structuredContent;
         if (loc?.found) {
@@ -2064,6 +2289,8 @@ app.ontoolinputpartial = (params) => {
 
   const partialConversationId = extractConversationIdFromArgs(params?.arguments);
   const partialRouteHint = extractRouteHintFromArgs(params?.arguments);
+  const partialWorkspaceRoot = extractWorkspaceRootFromArgs(params?.arguments);
+  const partialWorkspaceFile = extractWorkspaceFileFromArgs(params?.arguments);
   let changed = false;
 
   if (partialConversationId && partialConversationId !== uiState.conversationId) {
@@ -2073,6 +2300,13 @@ app.ontoolinputpartial = (params) => {
 
   if (partialRouteHint && partialRouteHint !== uiState.routeHint) {
     uiState.routeHint = partialRouteHint;
+    changed = true;
+  }
+
+  if (applyWorkspaceHints({
+    workspaceRoot: partialWorkspaceRoot,
+    workspaceFile: partialWorkspaceFile,
+  })) {
     changed = true;
   }
 
@@ -2091,11 +2325,17 @@ app.ontoolinput = (params) => {
   }
 
   const explicitConversationId = extractConversationIdFromArgs(params?.arguments);
+  const explicitWorkspaceRoot = extractWorkspaceRootFromArgs(params?.arguments);
+  const explicitWorkspaceFile = extractWorkspaceFileFromArgs(params?.arguments);
   const nextRouteHint = extractRouteHintFromArgs(params?.arguments) || uiState.latestAiMessage || uiState.routeHint;
   const isRepeatedToolInput = acceptedToolInputForInstance && uiState.completedTool;
   const isHistoricalProbe = uiState.completedTool && !explicitConversationId;
   uiState.conversationId = explicitConversationId || uiState.conversationId;
   uiState.routeHint = nextRouteHint;
+  applyWorkspaceHints({
+    workspaceRoot: explicitWorkspaceRoot,
+    workspaceFile: explicitWorkspaceFile,
+  });
 
   if (isHistoricalProbe) {
     uiState.pendingView = false;
@@ -2176,6 +2416,7 @@ app.ontoolresult = (result) => {
     const resultPreviewMessage = stateFromResult.previewMessage.trim();
     uiState.hydrated = true;
     uiState.pendingView = false;
+    applyWorkspaceHints({ workspaceRoot: stateFromResult.workspaceRoot });
     uiState.anyWaiting = stateFromResult.anyWaiting;
     uiState.waiting = stateFromResult.waiting && stateFromResult.isCurrentView;
     uiState.isCurrentView = stateFromResult.isCurrentView;

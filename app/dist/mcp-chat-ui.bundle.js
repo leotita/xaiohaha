@@ -15352,6 +15352,7 @@ ${att.content || ""}
       this.anchorEl = null;
       this.visible = false;
       this.loading = false;
+      this.errorMessage = "";
       this.query = "";
       this.items = [];
       this.selectedIndex = -1;
@@ -15366,6 +15367,7 @@ ${att.content || ""}
     showLoading(query = "") {
       this.visible = true;
       this.loading = true;
+      this.errorMessage = "";
       this.query = query;
       this.items = [];
       this.selectedIndex = -1;
@@ -15375,15 +15377,27 @@ ${att.content || ""}
     showItems(items, query = "") {
       this.visible = true;
       this.loading = false;
+      this.errorMessage = "";
       this.query = query;
       this.items = Array.isArray(items) ? items : [];
       this.selectedIndex = this.items.length > 0 ? 0 : -1;
       this.el.hidden = false;
       this.render();
     }
+    showError(message, query = "") {
+      this.visible = true;
+      this.loading = false;
+      this.errorMessage = String(message || "").trim() || "\u641C\u7D22\u9879\u76EE\u6587\u4EF6\u5931\u8D25";
+      this.query = query;
+      this.items = [];
+      this.selectedIndex = -1;
+      this.el.hidden = false;
+      this.render();
+    }
     hide() {
       this.visible = false;
       this.loading = false;
+      this.errorMessage = "";
       this.query = "";
       this.items = [];
       this.selectedIndex = -1;
@@ -15408,6 +15422,10 @@ ${att.content || ""}
       this.updatePlacement();
       if (this.loading) {
         this.el.innerHTML = `<div class="xh-file-empty">\u641C\u7D22\u9879\u76EE\u6587\u4EF6...</div>`;
+        return;
+      }
+      if (this.errorMessage) {
+        this.el.innerHTML = `<div class="xh-file-empty">${escapeHtml(this.errorMessage)}</div>`;
         return;
       }
       if (this.items.length === 0) {
@@ -16384,6 +16402,8 @@ ${att.content || ""}
     pendingView: false,
     instanceId: "",
     conversationId: "",
+    workspaceRoot: "",
+    workspaceFile: "",
     routeHint: "",
     anyWaiting: false,
     waiting: false,
@@ -16411,6 +16431,127 @@ ${att.content || ""}
   var bootstrapRefreshTimer = null;
   var bootstrapRefreshAttempts = 0;
   var lastRenderedPreviewText = "";
+  var HOST_WORKSPACE_ROOT_PATHS = [
+    ["workspaceRoot"],
+    ["workspace_root"],
+    ["projectRoot"],
+    ["project_root"],
+    ["cwd"],
+    ["workingDirectory"],
+    ["working_directory"],
+    ["workspace", "root"],
+    ["workspace", "path"],
+    ["workspace", "uri"],
+    ["project", "root"],
+    ["project", "path"],
+    ["editor", "workspaceRoot"],
+    ["editor", "workspace", "root"],
+    ["activeWorkspace", "path"],
+    ["activeWorkspace", "rootPath"]
+  ];
+  var HOST_WORKSPACE_FILE_PATHS = [
+    ["currentFile"],
+    ["current_file"],
+    ["activeFile"],
+    ["active_file"],
+    ["filePath"],
+    ["file_path"],
+    ["documentPath"],
+    ["document_path"],
+    ["editor", "document", "path"],
+    ["editor", "document", "uri"],
+    ["editor", "activeFile", "path"],
+    ["editor", "activeFile", "uri"],
+    ["activeDocument", "path"],
+    ["activeDocument", "uri"],
+    ["document", "path"],
+    ["document", "uri"],
+    ["selection", "filePath"],
+    ["selection", "file_path"],
+    ["resource", "path"],
+    ["resource", "uri"]
+  ];
+  function normalizeWorkspaceHint(value) {
+    const normalized = typeof value === "string" ? value.trim() : "";
+    if (!normalized) {
+      return "";
+    }
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(normalized) && !normalized.startsWith("file://")) {
+      return "";
+    }
+    const looksAbsolutePath = normalized.startsWith("/") || normalized.startsWith("\\\\") || /^[A-Za-z]:[\\/]/.test(normalized) || normalized.startsWith("file://");
+    return looksAbsolutePath ? normalized : "";
+  }
+  function readNestedString(source, pathSegments = []) {
+    let current = source;
+    for (const segment of pathSegments) {
+      if (!current || typeof current !== "object" || !(segment in current)) {
+        return "";
+      }
+      current = current[segment];
+    }
+    return typeof current === "string" ? current.trim() : "";
+  }
+  function pickNestedString(source, candidatePaths = []) {
+    for (const pathSegments of candidatePaths) {
+      const value = readNestedString(source, pathSegments);
+      if (value) {
+        return value;
+      }
+    }
+    return "";
+  }
+  function extractWorkspaceRootFromArgs(args) {
+    if (!args || typeof args !== "object") {
+      return "";
+    }
+    return normalizeWorkspaceHint(
+      typeof args.workspace_root === "string" ? args.workspace_root : typeof args.workspaceRoot === "string" ? args.workspaceRoot : typeof args.project_root === "string" ? args.project_root : typeof args.projectRoot === "string" ? args.projectRoot : typeof args.cwd === "string" ? args.cwd : typeof args.working_directory === "string" ? args.working_directory : typeof args.workingDirectory === "string" ? args.workingDirectory : ""
+    );
+  }
+  function extractWorkspaceFileFromArgs(args) {
+    if (!args || typeof args !== "object") {
+      return "";
+    }
+    return normalizeWorkspaceHint(
+      typeof args.workspace_file === "string" ? args.workspace_file : typeof args.workspaceFile === "string" ? args.workspaceFile : typeof args.current_file === "string" ? args.current_file : typeof args.currentFile === "string" ? args.currentFile : typeof args.file_path === "string" ? args.file_path : typeof args.filePath === "string" ? args.filePath : typeof args.active_file === "string" ? args.active_file : typeof args.activeFile === "string" ? args.activeFile : ""
+    );
+  }
+  function extractWorkspaceHintsFromHostContext(hostContext) {
+    if (!hostContext || typeof hostContext !== "object") {
+      return { workspaceRoot: "", workspaceFile: "" };
+    }
+    return {
+      workspaceRoot: normalizeWorkspaceHint(pickNestedString(hostContext, HOST_WORKSPACE_ROOT_PATHS)),
+      workspaceFile: normalizeWorkspaceHint(pickNestedString(hostContext, HOST_WORKSPACE_FILE_PATHS))
+    };
+  }
+  function applyWorkspaceHints({ workspaceRoot = "", workspaceFile = "" } = {}) {
+    const normalizedWorkspaceRoot = normalizeWorkspaceHint(workspaceRoot);
+    const normalizedWorkspaceFile = normalizeWorkspaceHint(workspaceFile);
+    let changed = false;
+    if (normalizedWorkspaceRoot && normalizedWorkspaceRoot !== uiState.workspaceRoot) {
+      uiState.workspaceRoot = normalizedWorkspaceRoot;
+      changed = true;
+    }
+    if (normalizedWorkspaceFile && normalizedWorkspaceFile !== uiState.workspaceFile) {
+      uiState.workspaceFile = normalizedWorkspaceFile;
+      changed = true;
+    }
+    return changed;
+  }
+  function buildWorkspaceHttpParams() {
+    return {
+      workspaceRoot: uiState.workspaceRoot || void 0,
+      workspaceFile: uiState.workspaceFile || void 0
+    };
+  }
+  function buildWorkspaceToolArgs() {
+    return {
+      workspace_root: uiState.workspaceRoot || void 0,
+      workspace_file: uiState.workspaceFile || void 0
+    };
+  }
   function installRichInputBridge(editorEl) {
     let disabled = false;
     let placeholder = editorEl.dataset.placeholder || "";
@@ -16864,28 +17005,41 @@ ${att.content || ""}
           const payload = await callLocalJson("/app/project-files", {
             params: {
               query: mention.query,
-              limit: 20
+              limit: 20,
+              ...buildWorkspaceHttpParams()
             }
           });
           items = Array.isArray(payload?.items) ? payload.items : [];
-        } catch {
+        } catch (localError) {
+          const localErrorMessage = localError instanceof Error ? localError.message : "";
+          const shouldFallback = !localErrorMessage || localErrorMessage === "\u6D4F\u89C8\u5668\u804A\u5929\u5730\u5740\u4E0D\u53EF\u7528" || localErrorMessage === "\u672C\u5730\u670D\u52A1\u8BF7\u6C42\u8D85\u65F6" || localErrorMessage === "Failed to fetch";
+          if (!shouldFallback) {
+            throw localError;
+          }
           const result = await app.callServerTool({
             name: "xiaohaha_search_project_files",
             arguments: {
               query: mention.query,
-              limit: 20
+              limit: 20,
+              ...buildWorkspaceToolArgs()
             }
           }, {
             timeout: LOCAL_HTTP_TIMEOUT_MS
           });
+          if (result?.isError) {
+            const toolErrorMessage = typeof result?.structuredContent?.error === "string" && result.structuredContent.error.trim() ? result.structuredContent.error.trim() : Array.isArray(result?.content) ? result.content.find((item) => typeof item?.text === "string" && item.text.trim())?.text || "" : "";
+            throw new Error(toolErrorMessage || "\u641C\u7D22\u9879\u76EE\u6587\u4EF6\u5931\u8D25");
+          }
           items = Array.isArray(result?.structuredContent?.items) ? result.structuredContent.items : [];
         }
         if (currentSeq !== mentionSearchSeq) return;
+        uiState.error = "";
         fileMentionPalette.showItems(items, mention.query);
       } catch (error40) {
         if (currentSeq !== mentionSearchSeq) return;
-        fileMentionPalette.hide();
-        uiState.error = error40 instanceof Error ? error40.message : "\u641C\u7D22\u9879\u76EE\u6587\u4EF6\u5931\u8D25";
+        const errorMessage = error40 instanceof Error ? error40.message : "\u641C\u7D22\u9879\u76EE\u6587\u4EF6\u5931\u8D25";
+        fileMentionPalette.showError(errorMessage, mention.query);
+        uiState.error = errorMessage;
         render();
       }
     }, mention.query ? FILE_MENTION_SEARCH_DEBOUNCE_MS : 0);
@@ -16946,14 +17100,16 @@ ${att.content || ""}
           method: "POST",
           timeoutMs: LOCAL_SEND_TIMEOUT_MS,
           body: {
-            path: mention.path
+            path: mention.path,
+            ...buildWorkspaceHttpParams()
           }
         });
       } catch {
         const result = await app.callServerTool({
           name: "xiaohaha_open_project_file",
           arguments: {
-            file_path: mention.path
+            file_path: mention.path,
+            ...buildWorkspaceToolArgs()
           }
         }, {
           timeout: LOCAL_SEND_TIMEOUT_MS
@@ -17206,11 +17362,18 @@ ${att.content || ""}
     if (hostContext?.theme) PQ(hostContext.theme);
     if (hostContext?.styles?.variables) qQ(hostContext.styles.variables);
     if (hostContext?.styles?.css?.fonts) TQ(hostContext.styles.css.fonts);
+    const hostWorkspaceHints = extractWorkspaceHintsFromHostContext(hostContext);
     const previousInstanceId = uiState.instanceId;
     if (hostContext?.toolInfo?.id !== void 0 && hostContext?.toolInfo?.id !== null) {
       uiState.instanceId = String(hostContext.toolInfo.id);
     }
-    return previousInstanceId !== uiState.instanceId;
+    const instanceChanged = previousInstanceId !== uiState.instanceId;
+    if (instanceChanged) {
+      uiState.workspaceRoot = "";
+      uiState.workspaceFile = "";
+    }
+    applyWorkspaceHints(hostWorkspaceHints);
+    return instanceChanged;
   }
   function normalizeState(state) {
     const events = Array.isArray(state?.events) ? state.events : [];
@@ -17218,6 +17381,9 @@ ${att.content || ""}
     const latestAiMessage = typeof state?.latestAiMessage === "string" && state.latestAiMessage.trim() ? state.latestAiMessage.trim() : getLatestAiMessage(events);
     return {
       conversationId: typeof state?.conversationId === "string" ? state.conversationId : "",
+      workspaceRoot: normalizeWorkspaceHint(
+        typeof state?.workspaceRoot === "string" ? state.workspaceRoot : typeof state?.workspace_root === "string" ? state.workspace_root : ""
+      ),
       anyWaiting: Boolean(state?.anyWaiting),
       waiting: Boolean(state?.waiting),
       isCurrentView: Boolean(state?.isCurrentView),
@@ -17260,7 +17426,7 @@ ${att.content || ""}
   }
   function extractConversationIdFromArgs(args) {
     if (!args || typeof args !== "object") return "";
-    return typeof args.conversation_id === "string" ? args.conversation_id : "";
+    return typeof args.conversation_id === "string" ? args.conversation_id : typeof args.conversationId === "string" ? args.conversationId : "";
   }
   function extractRouteHintFromArgs(args) {
     if (!args || typeof args !== "object") return "";
@@ -17290,7 +17456,8 @@ ${att.content || ""}
         conversationId: uiState.conversationId || void 0,
         routeHint: uiState.routeHint || void 0,
         resourceUri: CURRENT_APP_RESOURCE_URI || void 0,
-        bindInstance: shouldAttemptBindCurrentView() ? "1" : void 0
+        bindInstance: shouldAttemptBindCurrentView() ? "1" : void 0,
+        ...buildWorkspaceHttpParams()
       }
     });
     return normalizeState(payload?.state);
@@ -17303,7 +17470,8 @@ ${att.content || ""}
         conversation_id: uiState.conversationId || void 0,
         route_hint: uiState.routeHint || void 0,
         resource_uri: CURRENT_APP_RESOURCE_URI || void 0,
-        bind_instance: shouldAttemptBindCurrentView() || void 0
+        bind_instance: shouldAttemptBindCurrentView() || void 0,
+        ...buildWorkspaceToolArgs()
       }
     }, {
       timeout: LOCAL_HTTP_TIMEOUT_MS
@@ -17320,7 +17488,8 @@ ${att.content || ""}
         attachments: attachmentsList || void 0,
         instanceId: uiState.instanceId || void 0,
         conversationId: uiState.conversationId || void 0,
-        routeHint: uiState.routeHint || void 0
+        routeHint: uiState.routeHint || void 0,
+        ...buildWorkspaceHttpParams()
       }
     });
     return normalizeState(payload?.state);
@@ -17334,7 +17503,8 @@ ${att.content || ""}
         attachments: attachmentsList || void 0,
         instance_id: uiState.instanceId || void 0,
         conversation_id: uiState.conversationId || void 0,
-        route_hint: uiState.routeHint || void 0
+        route_hint: uiState.routeHint || void 0,
+        ...buildWorkspaceToolArgs()
       }
     }, {
       timeout: LOCAL_SEND_TIMEOUT_MS
@@ -17410,6 +17580,7 @@ ${att.content || ""}
       wasPendingView && !nextState.isCurrentView && !previewMessage && !uiState.completedTool
     );
     uiState.conversationId = nextState.conversationId || uiState.conversationId;
+    applyWorkspaceHints({ workspaceRoot: nextState.workspaceRoot });
     uiState.anyWaiting = nextState.anyWaiting;
     uiState.waiting = nextState.waiting && nextState.isCurrentView;
     uiState.isCurrentView = nextState.isCurrentView;
@@ -17543,6 +17714,7 @@ ${att.content || ""}
       }
       if (nextState) {
         uiState.conversationId = nextState.conversationId || uiState.conversationId;
+        applyWorkspaceHints({ workspaceRoot: nextState.workspaceRoot });
         uiState.anyWaiting = nextState.anyWaiting;
         uiState.waiting = nextState.waiting && nextState.isCurrentView;
         uiState.isCurrentView = nextState.isCurrentView;
@@ -17871,7 +18043,10 @@ ${att.content || ""}
         insertInlineSnippetAttachment(attId, pasteSelection);
         app.callServerTool({
           name: "xiaohaha_locate_code",
-          arguments: { code_text: rawText }
+          arguments: {
+            code_text: rawText,
+            ...buildWorkspaceToolArgs()
+          }
         }).then((result) => {
           const loc = result?.structuredContent;
           if (loc?.found) {
@@ -18021,6 +18196,8 @@ ${att.content || ""}
     }
     const partialConversationId = extractConversationIdFromArgs(params?.arguments);
     const partialRouteHint = extractRouteHintFromArgs(params?.arguments);
+    const partialWorkspaceRoot = extractWorkspaceRootFromArgs(params?.arguments);
+    const partialWorkspaceFile = extractWorkspaceFileFromArgs(params?.arguments);
     let changed = false;
     if (partialConversationId && partialConversationId !== uiState.conversationId) {
       uiState.conversationId = partialConversationId;
@@ -18028,6 +18205,12 @@ ${att.content || ""}
     }
     if (partialRouteHint && partialRouteHint !== uiState.routeHint) {
       uiState.routeHint = partialRouteHint;
+      changed = true;
+    }
+    if (applyWorkspaceHints({
+      workspaceRoot: partialWorkspaceRoot,
+      workspaceFile: partialWorkspaceFile
+    })) {
       changed = true;
     }
     if (changed) {
@@ -18043,11 +18226,17 @@ ${att.content || ""}
       return;
     }
     const explicitConversationId = extractConversationIdFromArgs(params?.arguments);
+    const explicitWorkspaceRoot = extractWorkspaceRootFromArgs(params?.arguments);
+    const explicitWorkspaceFile = extractWorkspaceFileFromArgs(params?.arguments);
     const nextRouteHint = extractRouteHintFromArgs(params?.arguments) || uiState.latestAiMessage || uiState.routeHint;
     const isRepeatedToolInput = acceptedToolInputForInstance && uiState.completedTool;
     const isHistoricalProbe = uiState.completedTool && !explicitConversationId;
     uiState.conversationId = explicitConversationId || uiState.conversationId;
     uiState.routeHint = nextRouteHint;
+    applyWorkspaceHints({
+      workspaceRoot: explicitWorkspaceRoot,
+      workspaceFile: explicitWorkspaceFile
+    });
     if (isHistoricalProbe) {
       uiState.pendingView = false;
       uiState.anyWaiting = false;
@@ -18122,6 +18311,7 @@ ${att.content || ""}
       const resultPreviewMessage = stateFromResult.previewMessage.trim();
       uiState.hydrated = true;
       uiState.pendingView = false;
+      applyWorkspaceHints({ workspaceRoot: stateFromResult.workspaceRoot });
       uiState.anyWaiting = stateFromResult.anyWaiting;
       uiState.waiting = stateFromResult.waiting && stateFromResult.isCurrentView;
       uiState.isCurrentView = stateFromResult.isCurrentView;

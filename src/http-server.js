@@ -2,17 +2,16 @@ import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import express from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 
-import { BUNDLE_PATH, HOST, MCP_PATH, PORT, WORKSPACE_ROOT } from "./config.js";
+import { BUNDLE_PATH, HOST, MCP_PATH, PORT } from "./config.js";
 import { CHAT_PAGE_HTML } from "./http-chat-page.js";
 import { DiagnosticsBuffer } from "./diagnostics.js";
-import { buildPreviewFromInput, readProjectFile, searchProjectFiles } from "./mcp-app.js";
+import { buildPreviewFromInput, openProjectFile, readProjectFile, resolveProjectRoot, searchProjectFiles } from "./mcp-app.js";
 import { createMcpServer } from "./mcp-server.js";
 import { debugLog } from "./process-manager.js";
 import { MAX_ATTACHMENT_UPLOAD_BYTES } from "./attachment-store.js";
@@ -52,6 +51,30 @@ function getHeaderValue(value) {
   }
 
   return typeof value === "string" ? value : "";
+}
+
+function getWorkspaceHints(source = {}) {
+  if (!source || typeof source !== "object") {
+    return {
+      workspaceRoot: "",
+      workspaceFile: "",
+    };
+  }
+
+  return {
+    workspaceRoot:
+      typeof source.workspaceRoot === "string"
+        ? source.workspaceRoot
+        : typeof source.workspace_root === "string"
+          ? source.workspace_root
+          : "",
+    workspaceFile:
+      typeof source.workspaceFile === "string"
+        ? source.workspaceFile
+        : typeof source.workspace_file === "string"
+          ? source.workspace_file
+          : "",
+  };
 }
 
 function sendJsonRpcError(res, statusCode, message) {
@@ -162,73 +185,6 @@ function decodeAttachmentUploadBuffer(buffer, encoding) {
   }
 
   return Buffer.from(match[2], "base64");
-}
-
-function normalizeProjectPath(filePath) {
-  let normalized = String(filePath || "")
-    .replaceAll("\\", "/")
-    .trim();
-
-  if (!normalized) {
-    return "";
-  }
-
-  if (normalized.startsWith("file://")) {
-    try {
-      normalized = decodeURIComponent(new URL(normalized).pathname);
-    } catch {}
-  }
-
-  const runtimeMarker = "/runtime/workspace/";
-  const markerIndex = normalized.lastIndexOf(runtimeMarker);
-  if (markerIndex >= 0) {
-    normalized = normalized.slice(markerIndex + runtimeMarker.length);
-  }
-
-  const workspaceRoot = String(WORKSPACE_ROOT || "")
-    .replaceAll("\\", "/")
-    .replace(/\/+$/, "");
-  const normalizedLower = normalized.toLowerCase();
-  const workspaceLower = workspaceRoot.toLowerCase();
-
-  if (workspaceRoot && normalizedLower.startsWith(`${workspaceLower}/`)) {
-    normalized = normalized.slice(workspaceRoot.length + 1);
-  } else if (workspaceRoot && normalizedLower === workspaceLower) {
-    normalized = "";
-  }
-
-  return normalized
-    .replace(/^\.\//, "")
-    .replace(/^\/+/, "")
-    .trim();
-}
-
-function isPathInsideWorkspace(workspaceRoot, targetPath) {
-  const relativePath = path.relative(workspaceRoot, targetPath);
-  return relativePath === ""
-    || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
-}
-
-async function resolveWorkspaceFilePath(filePath) {
-  const normalizedPath = normalizeProjectPath(filePath);
-  if (!normalizedPath) {
-    throw new Error("文件路径不能为空");
-  }
-
-  const fullPath = path.resolve(WORKSPACE_ROOT, normalizedPath);
-  if (!isPathInsideWorkspace(WORKSPACE_ROOT, fullPath)) {
-    throw new Error("只能打开当前项目内的文件");
-  }
-
-  const stat = await fs.stat(fullPath).catch(() => null);
-  if (!stat?.isFile()) {
-    throw new Error("未找到文件");
-  }
-
-  return {
-    fullPath,
-    relativePath: normalizedPath,
-  };
 }
 
 export function createChatHttpServer({ sessionService, attachmentStore }) {
@@ -549,107 +505,130 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
     }
   });
 
-  app.post("/send", (req, res) => {
-    const payload = req.body && typeof req.body === "object" ? req.body : {};
-    const conversationId = payload.conversationId || payload.conversation_id;
-    const instanceId = payload.instanceId || payload.instance_id;
-    const routeHint = typeof payload.routeHint === "string"
-      ? payload.routeHint
-      : typeof payload.route_hint === "string"
-        ? payload.route_hint
-        : "";
-    const attachments = Array.isArray(payload.attachments) ? payload.attachments : [];
-    const previewMessage = typeof payload.previewMessage === "string" && payload.previewMessage.trim()
-      ? payload.previewMessage.trim()
-      : typeof payload.preview_message === "string" && payload.preview_message.trim()
-        ? payload.preview_message.trim()
-        : buildPreviewFromInput(String(payload.message || ""), attachments);
+  app.post("/send", async (req, res) => {
+    try {
+      const payload = req.body && typeof req.body === "object" ? req.body : {};
+      const conversationId = payload.conversationId || payload.conversation_id;
+      const instanceId = payload.instanceId || payload.instance_id;
+      const routeHint = typeof payload.routeHint === "string"
+        ? payload.routeHint
+        : typeof payload.route_hint === "string"
+          ? payload.route_hint
+          : "";
+      const attachments = Array.isArray(payload.attachments) ? payload.attachments : [];
+      const previewMessage = typeof payload.previewMessage === "string" && payload.previewMessage.trim()
+        ? payload.previewMessage.trim()
+        : typeof payload.preview_message === "string" && payload.preview_message.trim()
+          ? payload.preview_message.trim()
+          : buildPreviewFromInput(String(payload.message || ""), attachments);
+      const workspaceHints = getWorkspaceHints(payload);
 
-    recordDiagnostic("app_send_http", {
-      conversationId: conversationId || "",
-      instanceId: instanceId || "",
-      routeHint,
-      attachmentCount: attachments.length,
-      previewMessage,
-      hasMessage: typeof payload.message === "string" && payload.message.trim().length > 0,
-    });
-
-    if (instanceId || conversationId || routeHint) {
-      const session = sessionService.resolveSession({
-        conversationId,
-        instanceId,
-        aiResponseHint: routeHint,
+      recordDiagnostic("app_send_http", {
+        conversationId: conversationId || "",
+        instanceId: instanceId || "",
+        routeHint,
+        attachmentCount: attachments.length,
+        previewMessage,
+        hasMessage: typeof payload.message === "string" && payload.message.trim().length > 0,
       });
 
-      if (!session) {
-        recordDiagnostic("app_send_http_failed", {
-          conversationId: conversationId || "",
-          instanceId: instanceId || "",
-          routeHint,
-          reason: "conversation_not_found",
-        });
-        res.status(409).json({ ok: false, error: "conversation not found" });
-        return;
-      }
-
-      sessionService.bindAppInstanceToSession(session, instanceId);
-      sessionService.rememberToolPreview(session, instanceId || session.currentAppInstanceId, previewMessage);
-
-      if (sessionService.enqueueUserMessageWithAttachments(session, payload.message, previewMessage, attachments)) {
-        const state = sessionService.getChatState({
-          conversationId: session.conversationId,
+      if (instanceId || conversationId || routeHint) {
+        const session = sessionService.resolveSession({
+          conversationId,
           instanceId,
           aiResponseHint: routeHint,
-          bindInstance: false,
         });
-        recordDiagnostic("app_send_http_enqueued", {
+
+        if (!session) {
+          recordDiagnostic("app_send_http_failed", {
+            conversationId: conversationId || "",
+            instanceId: instanceId || "",
+            routeHint,
+            reason: "conversation_not_found",
+          });
+          res.status(409).json({ ok: false, error: "conversation not found" });
+          return;
+        }
+
+        const resolvedWorkspaceRoot = await resolveProjectRoot({
+          ...workspaceHints,
+          fallbackRoot: "",
+        }).catch(() => "");
+        if (resolvedWorkspaceRoot) {
+          sessionService.rememberWorkspaceRoot(session, resolvedWorkspaceRoot);
+        }
+        sessionService.bindAppInstanceToSession(session, instanceId);
+        sessionService.rememberToolPreview(session, instanceId || session.currentAppInstanceId, previewMessage);
+
+        if (sessionService.enqueueUserMessageWithAttachments(session, payload.message, previewMessage, attachments)) {
+          const state = sessionService.getChatState({
+            conversationId: session.conversationId,
+            instanceId,
+            aiResponseHint: routeHint,
+            bindInstance: false,
+          });
+          recordDiagnostic("app_send_http_enqueued", {
+            conversationId: session.conversationId,
+            instanceId: instanceId || session.currentAppInstanceId || "",
+            anyWaiting: state.anyWaiting,
+            waiting: state.waiting,
+            isCurrentView: state.isCurrentView,
+          });
+          res.json({ ok: true, conversationId: session.conversationId, state });
+          return;
+        }
+
+        recordDiagnostic("app_send_http_failed", {
           conversationId: session.conversationId,
           instanceId: instanceId || session.currentAppInstanceId || "",
-          anyWaiting: state.anyWaiting,
-          waiting: state.waiting,
-          isCurrentView: state.isCurrentView,
+          reason: "empty_message",
         });
-        res.json({ ok: true, conversationId: session.conversationId, state });
+        res.status(400).json({ ok: false, error: "empty" });
         return;
       }
 
-      recordDiagnostic("app_send_http_failed", {
+      const { session, error } = sessionService.resolveBrowserSession(conversationId);
+
+      if (!session) {
+        recordDiagnostic("browser_send_failed", {
+          conversationId: conversationId || "",
+          reason: error || "conversation_not_found",
+        });
+        res.status(409).json({ ok: false, error });
+        return;
+      }
+
+      const resolvedWorkspaceRoot = await resolveProjectRoot({
+        ...workspaceHints,
+        fallbackRoot: "",
+      }).catch(() => "");
+      if (resolvedWorkspaceRoot) {
+        sessionService.rememberWorkspaceRoot(session, resolvedWorkspaceRoot);
+      }
+
+      if (sessionService.enqueueUserMessageWithAttachments(session, payload.message, previewMessage, attachments)) {
+        recordDiagnostic("browser_send_enqueued", {
+          conversationId: session.conversationId,
+          attachmentCount: attachments.length,
+        });
+        res.json({ ok: true, conversationId: session.conversationId });
+        return;
+      }
+
+      recordDiagnostic("browser_send_failed", {
         conversationId: session.conversationId,
-        instanceId: instanceId || session.currentAppInstanceId || "",
         reason: "empty_message",
       });
       res.status(400).json({ ok: false, error: "empty" });
-      return;
-    }
-
-    const { session, error } = sessionService.resolveBrowserSession(conversationId);
-
-    if (!session) {
-      recordDiagnostic("browser_send_failed", {
-        conversationId: conversationId || "",
-        reason: error || "conversation_not_found",
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        error: error instanceof Error ? error.message : "发送消息失败",
       });
-      res.status(409).json({ ok: false, error });
-      return;
     }
-
-    if (sessionService.enqueueUserMessageWithAttachments(session, payload.message, previewMessage, attachments)) {
-      recordDiagnostic("browser_send_enqueued", {
-        conversationId: session.conversationId,
-        attachmentCount: attachments.length,
-      });
-      res.json({ ok: true, conversationId: session.conversationId });
-      return;
-    }
-
-    recordDiagnostic("browser_send_failed", {
-      conversationId: session.conversationId,
-      reason: "empty_message",
-    });
-    res.status(400).json({ ok: false, error: "empty" });
   });
 
-  app.get("/app/state", (req, res) => {
+  app.get("/app/state", async (req, res) => {
     const conversationId = typeof req.query.conversationId === "string"
       ? req.query.conversationId
       : typeof req.query.conversation_id === "string"
@@ -677,6 +656,7 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
           ? req.query.bind_instance
           : ""
     ) === "1";
+    const workspaceHints = getWorkspaceHints(req.query);
 
     const state = sessionService.getChatState({
       conversationId,
@@ -686,6 +666,22 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
       allowClientSessionFallback: false,
       bindInstance,
     });
+    const session = sessionService.resolveSession({
+      conversationId,
+      instanceId,
+      aiResponseHint: routeHint,
+      allowClientSessionFallback: false,
+    });
+    if (session) {
+      const resolvedWorkspaceRoot = await resolveProjectRoot({
+        ...workspaceHints,
+        fallbackRoot: "",
+      }).catch(() => "");
+      if (resolvedWorkspaceRoot) {
+        sessionService.rememberWorkspaceRoot(session, resolvedWorkspaceRoot);
+        state.workspaceRoot = session.workspaceRoot || state.workspaceRoot || "";
+      }
+    }
 
     recordDiagnostic("app_state_query", {
       conversationId,
@@ -712,10 +708,10 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
       const limit = Number.isFinite(parsedLimit)
         ? Math.max(1, Math.min(20, parsedLimit))
         : 20;
-      const items = await searchProjectFiles(query, limit);
+      const items = await searchProjectFiles(query, limit, getWorkspaceHints(req.query));
       res.json({ ok: true, items });
     } catch (error) {
-      res.status(500).json({
+      res.status(error?.statusCode || 500).json({
         ok: false,
         error: error instanceof Error ? error.message : "搜索项目文件失败",
       });
@@ -725,7 +721,7 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
   app.get("/app/project-file", async (req, res) => {
     try {
       const filePath = typeof req.query.path === "string" ? req.query.path : "";
-      const file = await readProjectFile(filePath);
+      const file = await readProjectFile(filePath, getWorkspaceHints(req.query));
       res.json(file);
     } catch (error) {
       res.status(400).json({
@@ -738,18 +734,8 @@ export function createChatHttpServer({ sessionService, attachmentStore }) {
   app.post("/app/open-project-file", async (req, res) => {
     try {
       const payload = req.body && typeof req.body === "object" ? req.body : {};
-      const { fullPath, relativePath } = await resolveWorkspaceFilePath(payload.path);
-
-      try {
-        await execFileAsync("/usr/bin/open", ["-a", "Cursor", fullPath]);
-      } catch {
-        await execFileAsync("/usr/bin/open", [fullPath]);
-      }
-
-      res.json({
-        ok: true,
-        path: relativePath,
-      });
+      const result = await openProjectFile(payload.path, getWorkspaceHints(payload));
+      res.json(result);
     } catch (error) {
       res.status(400).json({
         ok: false,

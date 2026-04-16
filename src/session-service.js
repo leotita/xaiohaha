@@ -56,6 +56,14 @@ function normalizeRouteHint(value) {
   return normalized || null;
 }
 
+function normalizeWorkspaceRoot(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value.trim();
+}
+
 function normalizeAttachmentRef(item) {
   if (!item || typeof item !== "object") {
     return null;
@@ -136,6 +144,7 @@ const BROWSER_SESSION_MAX_COUNT = 50;
 function createSessionState(conversationId) {
   return {
     conversationId,
+    workspaceRoot: "",
     waitingResolve: null,
     waitingClientSessionId: null,
     waitingToolInstanceId: null,
@@ -178,9 +187,10 @@ function getSessionLatestAiMessage(session) {
 function createSql(db) {
   return {
     upsertSession: db.prepare(`
-      INSERT INTO sessions (conversation_id, last_chat_event_id, updated_at)
-      VALUES (?, ?, ?)
+      INSERT INTO sessions (conversation_id, workspace_root, last_chat_event_id, updated_at)
+      VALUES (?, ?, ?, ?)
       ON CONFLICT(conversation_id) DO UPDATE SET
+        workspace_root = excluded.workspace_root,
         last_chat_event_id = excluded.last_chat_event_id,
         updated_at = excluded.updated_at
     `),
@@ -217,7 +227,7 @@ function createSql(db) {
         conversation_id = excluded.conversation_id
     `),
     selectSessions: db.prepare(`
-      SELECT conversation_id, last_chat_event_id, updated_at
+      SELECT conversation_id, workspace_root, last_chat_event_id, updated_at
       FROM sessions
       ORDER BY updated_at ASC
     `),
@@ -273,6 +283,7 @@ function deserializeLegacySession(rawSession) {
   }
 
   const session = createSessionState(conversationId);
+  session.workspaceRoot = normalizeWorkspaceRoot(rawSession?.workspaceRoot);
   session.messageQueue = Array.isArray(rawSession?.messageQueue)
     ? rawSession.messageQueue.map((item) => normalizeQueuedMessageEntry(item)).filter(Boolean)
     : [];
@@ -327,6 +338,7 @@ export class SessionService {
 
       CREATE TABLE IF NOT EXISTS sessions (
         conversation_id TEXT PRIMARY KEY,
+        workspace_root TEXT NOT NULL DEFAULT '',
         last_chat_event_id INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL
       );
@@ -371,6 +383,9 @@ export class SessionService {
     `);
 
     try {
+      this.db.exec(`ALTER TABLE sessions ADD COLUMN workspace_root TEXT NOT NULL DEFAULT ''`);
+    } catch {}
+    try {
       this.db.exec(`ALTER TABLE message_queue ADD COLUMN preview TEXT NOT NULL DEFAULT ''`);
     } catch {}
     try {
@@ -386,7 +401,12 @@ export class SessionService {
   }
 
   persistSessionMetadata(session) {
-    this.sql.upsertSession.run(session.conversationId, session.lastChatEventId, session.updatedAt);
+    this.sql.upsertSession.run(
+      session.conversationId,
+      session.workspaceRoot || "",
+      session.lastChatEventId,
+      session.updatedAt,
+    );
   }
 
   persistMessageQueue(session) {
@@ -423,12 +443,25 @@ export class SessionService {
     this.sql.upsertToolInstanceIndex.run(instanceId, conversationId);
   }
 
+  rememberWorkspaceRoot(session, workspaceRoot) {
+    const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
+    if (!session || !normalizedWorkspaceRoot || session.workspaceRoot === normalizedWorkspaceRoot) {
+      return false;
+    }
+
+    session.workspaceRoot = normalizedWorkspaceRoot;
+    this.touchSession(session);
+    this.persistSessionMetadata(session);
+    return true;
+  }
+
   loadSessionsFromDatabase() {
     this.sessions.clear();
     this.toolInstanceToConversationId.clear();
 
     for (const row of this.sql.selectSessions.all()) {
       const session = createSessionState(row.conversation_id);
+      session.workspaceRoot = normalizeWorkspaceRoot(row.workspace_root);
       session.lastChatEventId = row.last_chat_event_id;
       session.updatedAt = row.updated_at;
       session.messageQueue = this.sql.selectMessageQueue
@@ -936,6 +969,7 @@ export class SessionService {
     if (!session) {
       return {
         conversationId: "",
+        workspaceRoot: "",
         anyWaiting: false,
         waiting: false,
         isCurrentView: false,
@@ -964,6 +998,7 @@ export class SessionService {
 
     return {
       conversationId: session.conversationId,
+      workspaceRoot: session.workspaceRoot || "",
       anyWaiting: session.waitingResolve !== null,
       waiting: isCurrentInstanceWaiting,
       isCurrentView,
@@ -983,6 +1018,7 @@ export class SessionService {
 
     return {
       conversationId: session.conversationId,
+      workspaceRoot: session.workspaceRoot || "",
       waiting: session.waitingResolve !== null,
       queueLength: session.messageQueue.length,
       updatedAt: session.updatedAt,
