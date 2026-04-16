@@ -17446,8 +17446,34 @@ ${att.content || ""}
   }
   function shouldAttemptBindCurrentView() {
     return Boolean(
-      uiState.pendingView && uiState.instanceId && (uiState.conversationId || uiState.routeHint)
+      uiState.instanceId && isCheckMessagesToolContext() && !historicalViewFrozen && !teardownCompleted && !uiState.completedTool
     );
+  }
+  function refreshHostContextForActiveView() {
+    const hostContext = app.getHostContext();
+    const instanceChanged = syncHostContext(hostContext);
+    if (instanceChanged) {
+      acceptedToolInputForInstance = false;
+    }
+    return { hostContext, instanceChanged };
+  }
+  function recoverActiveView(source) {
+    if (!uiState.connected || historicalViewFrozen || teardownCompleted) {
+      return;
+    }
+    const { hostContext, instanceChanged } = refreshHostContextForActiveView();
+    if (instanceChanged && isCheckMessagesToolContext(hostContext) && !uiState.sending && !uiState.completedTool) {
+      enterPendingViewShell(source, { resetRouting: true });
+      render();
+    }
+    void refreshState().catch((err) => {
+      reportDiagnosticsEvent("ui_refresh_failed", {
+        source,
+        message: err instanceof Error ? err.message : "\u5237\u65B0\u5931\u8D25"
+      });
+      render();
+    });
+    ensureBootstrapRefresh(source);
   }
   async function refreshStateFromLocalHttp() {
     const payload = await callLocalJson("/app/state", {
@@ -17928,13 +17954,16 @@ ${att.content || ""}
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
+      recoverActiveView("visibilitychange");
       scheduleSizeSync();
     }
   });
   window.addEventListener("focus", () => {
+    recoverActiveView("window_focus");
     scheduleSizeSync();
   });
   window.addEventListener("pageshow", () => {
+    recoverActiveView("pageshow");
     scheduleSizeSync();
   });
   messageInput.addEventListener("paste", async (e) => {
@@ -18225,6 +18254,7 @@ ${att.content || ""}
     if (historicalViewFrozen) {
       return;
     }
+    refreshHostContextForActiveView();
     const explicitConversationId = extractConversationIdFromArgs(params?.arguments);
     const explicitWorkspaceRoot = extractWorkspaceRootFromArgs(params?.arguments);
     const explicitWorkspaceFile = extractWorkspaceFileFromArgs(params?.arguments);
@@ -18305,6 +18335,7 @@ ${att.content || ""}
     if (historicalViewFrozen) {
       return;
     }
+    refreshHostContextForActiveView();
     const stateFromResult = extractState(result);
     const nextState = extractPromptStateFromToolResult(result);
     if (stateFromResult) {
